@@ -375,7 +375,7 @@ class TestInitCreatesComboYaml:
         })
 
         runner = CliRunner()
-        result = runner.invoke(main, ["init"], input="n\nn\n")
+        result = runner.invoke(main, ["init"], input="n\nn\nn\n")
         assert result.exit_code == 0
         combos_path = tmp_path / "combos.yaml"
         assert combos_path.exists()

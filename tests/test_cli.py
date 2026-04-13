@@ -1030,7 +1030,7 @@ def test_init_creates_config_and_combos(tmp_path, monkeypatch):
     ))
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init"], input="n\nn\n")
+    result = runner.invoke(main, ["init"], input="n\nn\nn\n")
     assert result.exit_code == 0
     assert cfg_file.exists()
     assert combos_file.exists()
@@ -1057,7 +1057,7 @@ def test_init_registers_detected_python_tools(tmp_path, monkeypatch):
     monkeypatch.setattr(_doc, "detect_installed_tools", lambda: detected)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init"], input="n\nn\n")
+    result = runner.invoke(main, ["init"], input="n\nn\nn\n")
     assert result.exit_code == 0
 
     cfg = load_config()
@@ -1087,7 +1087,7 @@ def test_init_combos_file_already_exists(tmp_path, monkeypatch):
     ))
 
     runner = CliRunner()
-    result = runner.invoke(main, ["init"], input="n\nn\n")
+    result = runner.invoke(main, ["init"], input="n\nn\nn\n")
     assert result.exit_code == 0
     assert combos_file.read_text() == "# existing\n"
     assert "exists" in result.output

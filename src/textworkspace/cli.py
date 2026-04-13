@@ -175,6 +175,11 @@ def init() -> None:
         click.echo(f"  combos → {COMBOS_FILE} (exists)")
 
     click.echo()
+
+    # Offer to install fish shell functions
+    _init_fish_functions()
+
+    click.echo()
     click.echo("Done. Run `tw doctor` to check your setup.")
 
 
@@ -234,6 +239,44 @@ def _init_textserve(cfg: Any, tools: dict) -> None:
         )
     elif click.confirm("  Download textserve binary from GitHub?", default=False):
         _bootstrap_go_tool("textserve", cfg)
+    else:
+        click.echo("  skipped")
+
+
+def _init_fish_functions() -> None:
+    """Offer to install fish shell wrapper functions."""
+    from textworkspace.shell import generate_all_functions
+
+    fish_dir = Path.home() / ".config" / "fish" / "functions"
+    fish_tw_file = fish_dir / "tw.fish"
+
+    click.echo("fish shell wrapper  (optional, enables tw and x-aliases)")
+
+    # Check if fish is available
+    try:
+        subprocess.run(["fish", "--version"], capture_output=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        click.echo("  fish not found — skipped")
+        return
+
+    # Check if functions dir exists
+    if not fish_dir.exists():
+        if not click.confirm(f"  Create {fish_dir}?", default=False):
+            click.echo("  skipped")
+            return
+        fish_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check if already installed
+    if fish_tw_file.exists():
+        click.echo(f"  already installed → {fish_tw_file}")
+        return
+
+    # Offer to install
+    if click.confirm("  Install fish functions?", default=True):
+        tool_aliases = ["ta", "ts", "tp", "sv", "pr", "tm"]
+        functions = generate_all_functions(tool_aliases)
+        fish_tw_file.write_text(functions + "\n")
+        click.echo(f"  installed → {fish_tw_file}")
     else:
         click.echo("  skipped")
 
@@ -354,7 +397,8 @@ def switch(profile: str | None) -> None:
     """Switch the active workspace profile.
 
     Prints shell eval output to set environment variables.
-    Wrap in a fish function:  tw switch work | source
+    When run inside the tw fish wrapper, outputs env changes directly.
+    When run outside, outputs __TW_EVAL__ protocol for wrapper to handle.
     """
     if not _HAS_TEXTACCOUNTS:
         click.echo(
@@ -379,15 +423,54 @@ def switch(profile: str | None) -> None:
         click.echo(f"switch: unknown profile '{profile}'", err=True)
         raise SystemExit(1)
 
-    # Emit fish-compatible env exports for eval/source
-    for key, val in env.items():
-        click.echo(f"set -gx {key} {val!r}")
+    # Collect export commands
+    exports = [f"set -gx {key} {val!r}" for key, val in env.items()]
+
+    # Check if we're running inside the fish wrapper by looking for a marker env var
+    inside_wrapper = os.environ.get("__TW_WRAPPER__") == "1"
+
+    if not inside_wrapper and exports:
+        # Not inside wrapper: output __TW_EVAL__ protocol for wrapper to handle
+        click.echo("__TW_EVAL__")
+        for export in exports:
+            click.echo(export)
+    else:
+        # Inside wrapper or no exports: output directly
+        for export in exports:
+            click.echo(export)
 
     # Notify the underlying library (may update default, etc.)
     try:
         _ta_switch(profile)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"warning: switch side-effect failed — {exc}", err=True)
+
+
+# ---------------------------------------------------------------------------
+# tw shell [--fish]
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.option("--fish", is_flag=True, help="Output fish function definitions.")
+def shell(fish: bool) -> None:
+    """Generate shell wrapper functions for tw and aliases.
+
+    Output fish function definitions that can be installed into
+    ~/.config/fish/functions/ to enable tw, xtw, and x-aliases with
+    proper environment variable handling.
+    """
+    from textworkspace.shell import generate_all_functions
+
+    if not fish:
+        # Default to fish for now
+        fish = True
+
+    if fish:
+        # Generate x-aliases for known tools: ta, ts, tp, sv, pr, tm
+        tool_aliases = ["ta", "ts", "tp", "sv", "pr", "tm"]
+        output = generate_all_functions(tool_aliases)
+        click.echo(output)
 
 
 # ---------------------------------------------------------------------------
