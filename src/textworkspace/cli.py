@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import click
@@ -18,10 +19,19 @@ from textworkspace.bootstrap import (
     latest_version,
 )
 from textworkspace.combos import (
+    COMBOS_DIR,
     COMBOS_FILE,
     DEFAULT_COMBOS_YAML,
+    export_combo,
+    fetch_community_info,
+    install_combo,
+    list_installed_combos,
     load_combos,
     run_combo,
+    search_community,
+    update_combo,
+    _fetch_url,
+    _source_to_url,
 )
 from textworkspace.config import CONFIG_DIR, CONFIG_FILE, ToolEntry, config_as_yaml, load_config, save_config
 
@@ -703,6 +713,159 @@ def combos_add(name: str) -> None:
         with COMBOS_FILE.open("w") as f:
             _yaml.dump(existing, f, default_flow_style=False)
         click.echo(f"  saved '{name}' to {COMBOS_FILE}")
+
+
+@combos_cmd.command("install")
+@click.argument("source")
+def combos_install(source: str) -> None:
+    """Install a combo from a local file, gist URL, or gh:org/repo/name."""
+    # Fetch raw YAML
+    if source.startswith("gh:"):
+        try:
+            url = _source_to_url(source)
+            raw = _fetch_url(url)
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"combos install: {exc}", err=True)
+            raise SystemExit(1)
+    elif source.startswith(("http://", "https://")):
+        try:
+            raw = _fetch_url(source)
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"combos install: could not fetch {source} — {exc}", err=True)
+            raise SystemExit(1)
+    else:
+        path = Path(source)
+        if not path.exists():
+            click.echo(f"combos install: file not found: {source}", err=True)
+            raise SystemExit(1)
+        raw = path.read_text()
+
+    try:
+        name = install_combo(source, raw)
+    except (ValueError, Exception) as exc:  # noqa: BLE001
+        click.echo(f"combos install: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"installed '{name}' → {COMBOS_DIR / (name + '.yaml')}")
+
+
+@combos_cmd.command("export")
+@click.argument("name", required=False)
+@click.option("--all", "export_all", is_flag=True, help="Export all installed combos.")
+def combos_export(name: str | None, export_all: bool) -> None:
+    """Export combo(s) as standalone YAML to stdout."""
+    if export_all:
+        installed = list_installed_combos()
+        if not installed:
+            click.echo("No installed combos to export.")
+            return
+        for combo_name, _ in installed:
+            try:
+                click.echo(export_combo(combo_name), nl=False)
+                click.echo("---")
+            except Exception as exc:  # noqa: BLE001
+                click.echo(f"# error exporting {combo_name}: {exc}", err=True)
+        return
+
+    if not name:
+        click.echo("combos export: provide a NAME or use --all", err=True)
+        raise SystemExit(1)
+
+    try:
+        click.echo(export_combo(name), nl=False)
+    except FileNotFoundError as exc:
+        click.echo(f"combos export: {exc}", err=True)
+        raise SystemExit(1)
+
+
+@combos_cmd.command("update")
+def combos_update_installed() -> None:
+    """Re-fetch all installed combos from their source, skipping modified ones."""
+    installed = list_installed_combos()
+    if not installed:
+        click.echo("No installed combos to update.")
+        return
+
+    for name, file_data in installed:
+        result = update_combo(name, file_data)
+        if result == "updated":
+            click.echo(f"  {name}: updated")
+        elif result == "skipped":
+            click.echo(
+                f"  {name}: skipped — _modified is true (edit combos.d/{name}.yaml to clear)",
+                err=True,
+            )
+        else:
+            click.echo(f"  {name}: {result}", err=True)
+
+
+@combos_cmd.command("search")
+@click.argument("query")
+def combos_search(query: str) -> None:
+    """Search the community repo (paperworlds/textcombos) for combos."""
+    try:
+        results = search_community(query)
+    except RuntimeError as exc:
+        click.echo(f"combos search: {exc}", err=True)
+        raise SystemExit(1)
+
+    if not results:
+        click.echo(f"No combos found matching '{query}'.")
+        return
+
+    for item in results:
+        tags_part = f"  [{', '.join(item['tags'])}]" if item.get("tags") else ""
+        author_part = f" by {item['author']}" if item.get("author") else ""
+        click.echo(f"  {item['name']}{author_part}  —  {item['description']}{tags_part}")
+        if item.get("requires"):
+            click.echo(f"    requires: {', '.join(item['requires'])}")
+
+
+@combos_cmd.command("info")
+@click.argument("name")
+def combos_info(name: str) -> None:
+    """Show details for a combo in the community repo before installing."""
+    try:
+        data = fetch_community_info(name)
+    except RuntimeError as exc:
+        click.echo(f"combos info: {exc}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"name:        {data.get('name', name)}")
+    if data.get("author"):
+        click.echo(f"author:      {data['author']}")
+    if data.get("description"):
+        click.echo(f"description: {data['description']}")
+    tags = data.get("tags", [])
+    if tags:
+        click.echo(f"tags:        {', '.join(tags)}")
+    requires = data.get("requires", [])
+    if requires:
+        click.echo(f"requires:    {', '.join(requires)}")
+    steps = data.get("steps", [])
+    if steps:
+        click.echo(f"steps ({len(steps)}):")
+        for i, step in enumerate(steps, 1):
+            run_str = step.get("run", "")
+            note = ""
+            if step.get("skip_if"):
+                note = f"  [skip_if: {step['skip_if']}]"
+            elif step.get("only_if"):
+                note = f"  [only_if: {step['only_if']}]"
+            click.echo(f"  {i}. {run_str}{note}")
+    click.echo(f"\nInstall: tw combos install gh:{name}")
+
+
+@combos_cmd.command("remove")
+@click.argument("name")
+def combos_remove(name: str) -> None:
+    """Remove an installed combo from combos.d/."""
+    path = COMBOS_DIR / f"{name}.yaml"
+    if not path.exists():
+        click.echo(f"combos remove: '{name}' not found in combos.d/", err=True)
+        raise SystemExit(1)
+    path.unlink()
+    click.echo(f"removed '{name}'")
 
 
 # ---------------------------------------------------------------------------

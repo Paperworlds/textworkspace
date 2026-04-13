@@ -6,6 +6,7 @@ import os
 import shlex
 import socket
 import subprocess
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,10 @@ from textworkspace.config import CONFIG_DIR
 
 COMBOS_FILE = CONFIG_DIR / "combos.yaml"
 COMBOS_DIR = CONFIG_DIR / "combos.d"
+
+COMMUNITY_REPO = "paperworlds/textcombos"
+_GH_RAW_BASE = "https://raw.githubusercontent.com"
+_GH_API_BASE = "https://api.github.com"
 
 _TEXTPROXY_PORT = 9880
 
@@ -234,3 +239,229 @@ def run_combo(
                 return proc.returncode
 
     return 1 if (failed and continue_on_error) else 0
+
+
+# ---------------------------------------------------------------------------
+# Sharing helpers — fetch, install, export, update, search
+# ---------------------------------------------------------------------------
+
+
+def _fetch_url(url: str) -> str:
+    """Fetch raw text content from a URL."""
+    import httpx
+
+    resp = httpx.get(url, timeout=10, follow_redirects=True)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _source_to_url(source: str) -> str:
+    """Convert a gh: source spec to a raw GitHub URL."""
+    if not source.startswith("gh:"):
+        raise ValueError(f"Not a gh: source: {source}")
+    path = source[3:]  # strip "gh:"
+    parts = path.split("/")
+    if len(parts) < 3:
+        raise ValueError(f"gh: source must be gh:org/repo/name, got: {source}")
+    org, repo = parts[0], parts[1]
+    name = "/".join(parts[2:])
+    if not name.endswith(".yaml"):
+        name = f"{name}.yaml"
+    return f"{_GH_RAW_BASE}/{org}/{repo}/main/{name}"
+
+
+def _parse_standalone(raw: str) -> dict[str, Any]:
+    """Parse a standalone combo YAML.  Must have 'name' and 'steps'."""
+    data = yaml.safe_load(raw) or {}
+    if "name" not in data:
+        raise ValueError("Combo YAML missing required 'name' field")
+    if "steps" not in data:
+        raise ValueError("Combo YAML missing required 'steps' field")
+    return data
+
+
+def install_combo(source: str, raw_yaml: str) -> str:
+    """Install a combo from raw YAML string.  Returns the installed combo name."""
+    data = _parse_standalone(raw_yaml)
+    name: str = data["name"]
+
+    # Warn about missing requires
+    requires: list[str] = data.get("requires", [])
+    if requires:
+        from textworkspace.config import load_config
+
+        cfg = load_config()
+        missing = [r for r in requires if r not in cfg.tools]
+        if missing:
+            click.echo(
+                f"  warning: missing required tools: {', '.join(missing)}"
+                " — install them before using this combo",
+                err=True,
+            )
+
+    # Build combo definition (strip standalone-only fields)
+    _standalone_keys = {"name", "author", "tags", "requires"}
+    combo_defn: dict[str, Any] = {k: v for k, v in data.items() if k not in _standalone_keys}
+
+    # Preserve useful fields in the definition
+    if "author" in data:
+        combo_defn.setdefault("description", data.get("description", ""))
+    if "tags" in data:
+        combo_defn["tags"] = data["tags"]
+    if "requires" in data:
+        combo_defn["requires"] = data["requires"]
+
+    # Wrap with metadata
+    file_data: dict[str, Any] = {
+        "_source": source,
+        "_installed": date.today().isoformat(),
+        "_modified": False,
+        "combos": {name: combo_defn},
+    }
+
+    COMBOS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = COMBOS_DIR / f"{name}.yaml"
+    with dest.open("w") as f:
+        yaml.dump(file_data, f, default_flow_style=False, allow_unicode=True)
+
+    return name
+
+
+def export_combo(name: str) -> str:
+    """Return standalone YAML for a named combo from combos.d."""
+    path = COMBOS_DIR / f"{name}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Installed combo '{name}' not found in combos.d/")
+
+    with path.open() as f:
+        file_data = yaml.safe_load(f) or {}
+
+    combos_section = file_data.get("combos", {})
+    defn = combos_section.get(name)
+    if defn is None:
+        # Try to find any combo in the file
+        if combos_section:
+            defn = next(iter(combos_section.values()))
+        else:
+            raise ValueError(f"No combo definition found in {path}")
+
+    # Build standalone format
+    standalone: dict[str, Any] = {"name": name}
+    for key in ("description", "author", "tags", "requires", "args", "steps"):
+        if key in defn:
+            standalone[key] = defn[key]
+    # Include any extra fields
+    for key, val in defn.items():
+        if key not in standalone:
+            standalone[key] = val
+
+    return yaml.dump(standalone, default_flow_style=False, allow_unicode=True)
+
+
+def list_installed_combos() -> list[tuple[str, dict[str, Any]]]:
+    """Return (name, file_data) pairs for all installed combos in combos.d."""
+    if not COMBOS_DIR.exists():
+        return []
+    result = []
+    for path in sorted(COMBOS_DIR.glob("*.yaml")):
+        with path.open() as f:
+            file_data = yaml.safe_load(f) or {}
+        if "_source" in file_data:
+            name = path.stem
+            result.append((name, file_data))
+    return result
+
+
+def update_combo(name: str, file_data: dict[str, Any]) -> str:
+    """Re-fetch and reinstall a combo.  Returns 'updated', 'skipped', or 'error:<msg>'."""
+    source: str = file_data.get("_source", "")
+    if not source:
+        return "error:no _source"
+
+    if file_data.get("_modified", False):
+        return "skipped"
+
+    try:
+        if source.startswith("gh:"):
+            url = _source_to_url(source)
+            raw = _fetch_url(url)
+        elif source.startswith(("http://", "https://")):
+            raw = _fetch_url(source)
+        else:
+            # local file
+            local = Path(source)
+            if not local.exists():
+                return f"error:local file not found: {source}"
+            raw = local.read_text()
+    except Exception as exc:  # noqa: BLE001
+        return f"error:{exc}"
+
+    try:
+        install_combo(source, raw)
+    except Exception as exc:  # noqa: BLE001
+        return f"error:{exc}"
+
+    return "updated"
+
+
+def search_community(query: str) -> list[dict[str, Any]]:
+    """Search community repo for combos matching query string."""
+    import httpx
+
+    url = f"{_GH_API_BASE}/repos/{COMMUNITY_REPO}/contents/"
+    try:
+        resp = httpx.get(
+            url,
+            timeout=10,
+            headers={"Accept": "application/vnd.github.v3+json"},
+        )
+        resp.raise_for_status()
+        items = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Could not reach community repo: {exc}") from exc
+
+    query_lower = query.lower()
+    results: list[dict[str, Any]] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if not item.get("name", "").endswith(".yaml"):
+            continue
+        download_url = item.get("download_url")
+        if not download_url:
+            continue
+        try:
+            raw = _fetch_url(download_url)
+            data = yaml.safe_load(raw) or {}
+        except Exception:  # noqa: BLE001
+            continue
+
+        combo_name = data.get("name", item["name"].removesuffix(".yaml"))
+        desc = data.get("description", "")
+        tags = data.get("tags", [])
+        tags_str = " ".join(tags) if isinstance(tags, list) else str(tags)
+
+        haystack = f"{combo_name} {desc} {tags_str}".lower()
+        if query_lower in haystack:
+            results.append(
+                {
+                    "name": combo_name,
+                    "description": desc,
+                    "tags": tags if isinstance(tags, list) else [],
+                    "author": data.get("author", ""),
+                    "requires": data.get("requires", []),
+                }
+            )
+
+    return results
+
+
+def fetch_community_info(name: str) -> dict[str, Any]:
+    """Fetch a named combo's info from the community repo."""
+    url = f"{_GH_RAW_BASE}/{COMMUNITY_REPO}/main/{name}.yaml"
+    try:
+        raw = _fetch_url(url)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Could not fetch '{name}' from community repo: {exc}") from exc
+    return yaml.safe_load(raw) or {}

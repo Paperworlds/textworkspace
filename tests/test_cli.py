@@ -1,12 +1,22 @@
 """Tests for the textworkspace CLI entry point."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
 from click.testing import CliRunner
 
 from textworkspace.cli import main
+from textworkspace.combos import (
+    COMBOS_DIR,
+    export_combo,
+    fetch_community_info,
+    install_combo,
+    search_community,
+    update_combo,
+    _source_to_url,
+)
 from textworkspace.config import Config, ToolEntry, config_as_yaml, load_config, save_config
 
 
@@ -425,3 +435,329 @@ def test_status_with_mocked_integrations(monkeypatch):
     assert "running" in result.output
     assert "14.2k" in result.output
     assert "2 total" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Combo sharing — unit tests for combos module
+# ---------------------------------------------------------------------------
+
+_STANDALONE_YAML = """\
+name: my-stack
+author: paulie
+description: My test stack
+tags: [test, data]
+requires:
+  - textserve
+steps:
+  - run: proxy start
+    skip_if: proxy.running
+  - run: servers start --tag test
+"""
+
+
+def test_source_to_url_gh():
+    url = _source_to_url("gh:acme/combos/my-stack")
+    assert url == "https://raw.githubusercontent.com/acme/combos/main/my-stack.yaml"
+
+
+def test_source_to_url_gh_with_yaml_extension():
+    url = _source_to_url("gh:acme/combos/my-stack.yaml")
+    assert url == "https://raw.githubusercontent.com/acme/combos/main/my-stack.yaml"
+
+
+def test_source_to_url_gh_missing_name():
+    with pytest.raises(ValueError, match="gh:"):
+        _source_to_url("gh:acme/combos")
+
+
+def test_install_combo_local(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.combos.CONFIG_DIR", tmp_path)
+
+    name = install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+    assert name == "my-stack"
+
+    dest = tmp_path / "combos.d" / "my-stack.yaml"
+    assert dest.exists()
+
+    data = yaml.safe_load(dest.read_text())
+    assert data["_source"] == "/tmp/fake.yaml"
+    assert data["_modified"] is False
+    assert "_installed" in data
+    assert "combos" in data
+    assert "my-stack" in data["combos"]
+    defn = data["combos"]["my-stack"]
+    assert len(defn["steps"]) == 2
+
+
+def test_install_combo_missing_name(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    with pytest.raises(ValueError, match="name"):
+        install_combo("source", "steps:\n  - run: foo\n")
+
+
+def test_install_combo_missing_steps(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    with pytest.raises(ValueError, match="steps"):
+        install_combo("source", "name: foo\n")
+
+
+def test_install_combo_warns_missing_requires(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    cfg_file = tmp_path / "config.yaml"
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
+
+    # No tools configured → textserve will be missing
+    install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+    # warning goes to click's err stream; check it didn't raise
+
+
+def test_export_combo(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+
+    out = export_combo("my-stack")
+    parsed = yaml.safe_load(out)
+    assert parsed["name"] == "my-stack"
+    assert "steps" in parsed
+    assert "_source" not in parsed
+    assert "_modified" not in parsed
+    assert "_installed" not in parsed
+
+
+def test_export_combo_not_found(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    (tmp_path / "combos.d").mkdir()
+    with pytest.raises(FileNotFoundError):
+        export_combo("nonexistent")
+
+
+def test_update_combo_skips_modified(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+
+    file_data = {"_source": "/tmp/fake.yaml", "_modified": True}
+    result = update_combo("my-stack", file_data)
+    assert result == "skipped"
+
+
+def test_update_combo_local_source(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+
+    src = tmp_path / "source.yaml"
+    src.write_text(_STANDALONE_YAML)
+    install_combo(str(src), _STANDALONE_YAML)
+
+    file_data = {"_source": str(src), "_modified": False}
+    result = update_combo("my-stack", file_data)
+    assert result == "updated"
+
+
+def test_update_combo_no_source():
+    result = update_combo("foo", {"_modified": False})
+    assert result.startswith("error:")
+
+
+def test_search_community_mocked(monkeypatch, tmp_path):
+    import json
+
+    gh_listing = [
+        {
+            "name": "data-eng.yaml",
+            "download_url": "https://raw.githubusercontent.com/paperworlds/textcombos/main/data-eng.yaml",
+        }
+    ]
+    combo_yaml = (
+        "name: data-eng\ndescription: Data engineering stack\ntags: [data, airflow]\nsteps:\n  - run: foo\n"
+    )
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._body
+
+        @property
+        def text(self):
+            return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+    call_count = {"n": 0}
+
+    def _fake_get(url, **kwargs):
+        call_count["n"] += 1
+        if "contents" in url:
+            return _FakeResp(gh_listing)
+        return _FakeResp(combo_yaml)
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    results = search_community("data")
+    assert len(results) == 1
+    assert results[0]["name"] == "data-eng"
+    assert "airflow" in results[0]["tags"]
+
+
+def test_search_community_no_match(monkeypatch):
+    import json
+
+    gh_listing = [
+        {
+            "name": "other.yaml",
+            "download_url": "https://raw.githubusercontent.com/paperworlds/textcombos/main/other.yaml",
+        }
+    ]
+    combo_yaml = "name: other\ndescription: Something else\ntags: [misc]\nsteps:\n  - run: bar\n"
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._body
+
+        @property
+        def text(self):
+            return self._body if isinstance(self._body, str) else json.dumps(self._body)
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _FakeResp(gh_listing if "contents" in url else combo_yaml))
+
+    results = search_community("data")
+    assert results == []
+
+
+def test_fetch_community_info_mocked(monkeypatch):
+    combo_yaml = (
+        "name: my-stack\nauthor: paulie\ndescription: A stack\ntags: [test]\nsteps:\n  - run: foo\n"
+    )
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        @property
+        def text(self):
+            return combo_yaml
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: _FakeResp())
+
+    data = fetch_community_info("my-stack")
+    assert data["name"] == "my-stack"
+    assert data["author"] == "paulie"
+
+
+# ---------------------------------------------------------------------------
+# tw combos install / export / update / search — CLI integration
+# ---------------------------------------------------------------------------
+
+
+def test_cli_combos_install_local(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.cli.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+
+    src = tmp_path / "my-stack.yaml"
+    src.write_text(_STANDALONE_YAML)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "install", str(src)])
+    assert result.exit_code == 0
+    assert "installed 'my-stack'" in result.output
+    assert (tmp_path / "combos.d" / "my-stack.yaml").exists()
+
+
+def test_cli_combos_install_missing_file(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "install", str(tmp_path / "missing.yaml")])
+    assert result.exit_code != 0
+
+
+def test_cli_combos_export(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.cli.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+
+    install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "export", "my-stack"])
+    assert result.exit_code == 0
+    parsed = yaml.safe_load(result.output)
+    assert parsed["name"] == "my-stack"
+
+
+def test_cli_combos_export_all(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.cli.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+
+    install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "export", "--all"])
+    assert result.exit_code == 0
+    assert "my-stack" in result.output
+
+
+def test_cli_combos_remove(tmp_path, monkeypatch):
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.cli.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+
+    install_combo("/tmp/fake.yaml", _STANDALONE_YAML)
+    assert (tmp_path / "combos.d" / "my-stack.yaml").exists()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "remove", "my-stack"])
+    assert result.exit_code == 0
+    assert not (tmp_path / "combos.d" / "my-stack.yaml").exists()
+
+
+def test_cli_combos_search_mocked(monkeypatch):
+    monkeypatch.setattr(
+        "textworkspace.cli.search_community",
+        lambda q: [{"name": "data-eng", "description": "Data stack", "tags": ["data"], "author": "paulie", "requires": []}],
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "search", "data"])
+    assert result.exit_code == 0
+    assert "data-eng" in result.output
+
+
+def test_cli_combos_info_mocked(monkeypatch):
+    monkeypatch.setattr(
+        "textworkspace.cli.fetch_community_info",
+        lambda n: {
+            "name": n,
+            "author": "paulie",
+            "description": "A stack",
+            "tags": ["test"],
+            "requires": ["textserve"],
+            "steps": [{"run": "proxy start"}],
+        },
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["combos", "info", "my-stack"])
+    assert result.exit_code == 0
+    assert "my-stack" in result.output
+    assert "paulie" in result.output
+    assert "textserve" in result.output
