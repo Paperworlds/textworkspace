@@ -133,6 +133,40 @@ textworkspace config.yaml  ──tw sync──▸  textsessions config.toml
 textworkspace is the writer. Tools are readers of their own config.
 `tw sync` is the bridge. No circular dependencies.
 
+### `tw sync` command (planned)
+
+**Purpose:** push repos from `~/.config/paperworlds/config.yaml` into each
+tool's native config format, so tools stay standalone but benefit from a
+single source of truth when textworkspace is installed.
+
+**Behaviour:**
+
+```
+tw sync [--dry-run]
+```
+
+1. Read `repos` from paperworlds config.yaml
+2. For each supported tool config:
+   - **textsessions** (`~/.config/textsessions/config.toml`):
+     Merge repos into `[[repos]]` TOML array. Match by path — update
+     existing entries, append new ones, never delete repos the tool
+     already has (user may have added tool-specific repos).
+   - **textprompts** (future): same pattern, different config path.
+3. Print a diff of what changed (or would change with `--dry-run`).
+
+**Merge rules:**
+- Match by `path` (canonical, no trailing slash)
+- If a repo exists in both, textworkspace values win for `label` and
+  `profile` fields
+- If a repo exists only in the tool config, leave it untouched
+- If a repo exists only in textworkspace config, append it
+- Never delete repos from tool configs
+
+**Not in scope (v1):**
+- Pulling repos from tool configs back into textworkspace
+- Syncing non-repo settings (proxy, integrations, UI prefs)
+- Auto-sync on `tw init` (manual `tw sync` only)
+
 ## Adding a new repo to the stack
 
 1. Decide: Python package or Go binary
