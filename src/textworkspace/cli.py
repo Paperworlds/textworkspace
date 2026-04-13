@@ -419,42 +419,78 @@ _PYTHON_TOOLS = ("textaccounts", "textsessions")
 def dev(ctx: click.Context) -> None:
     """Developer mode — install tools from local repo checkouts.
 
-    `tw dev on`   — enable developer mode and install tools editable
-    `tw dev off`  — switch back to user mode (PyPI installs)
-    `tw dev`      — show current mode
+    Requires `defaults.dev_root` in config, pointing to the directory
+    containing tool repos (e.g. ~/projects/personal/paperworlds).
+
+    \b
+    tw dev on        — enable dev mode, install tools editable
+    tw dev off       — switch back to user mode (PyPI)
+    tw dev reinstall — re-run editable installs after version bumps
+    tw dev           — show current mode
     """
     if ctx.invoked_subcommand is not None:
         return
     cfg = load_config()
     mode = cfg.defaults.get("mode", "user")
+    dev_root = cfg.defaults.get("dev_root", "")
     click.echo(f"mode: {mode}")
+    if dev_root:
+        click.echo(f"dev_root: {dev_root}")
     if mode == "developer":
         for name in _PYTHON_TOOLS:
-            repo_path = _find_repo_path(cfg, name)
-            status = f"-> {repo_path}" if repo_path else "(no repo in config)"
-            click.echo(f"  {name}: {status}")
+            repo_path = _dev_repo_path(cfg, name)
+            if repo_path and Path(repo_path).exists():
+                click.echo(f"  {name}: {repo_path}")
+            elif repo_path:
+                click.echo(f"  {name}: {repo_path} (missing)")
+            else:
+                click.echo(f"  {name}: not found in dev_root")
+
+
+def _dev_repo_path(cfg: Any, tool_name: str) -> str | None:
+    """Resolve a tool's repo path from dev_root."""
+    dev_root = cfg.defaults.get("dev_root", "")
+    if not dev_root:
+        return None
+    candidate = Path(dev_root).expanduser() / tool_name
+    return str(candidate)
 
 
 @dev.command("on")
-def dev_on() -> None:
-    """Enable developer mode and install Python tools as editable from local repos."""
+@click.argument("dev_root", required=False)
+def dev_on(dev_root: str | None) -> None:
+    """Enable developer mode and install Python tools as editable.
+
+    Optionally pass DEV_ROOT to set the base path where tool repos live.
+    If not passed, uses the existing dev_root from config.
+    """
     cfg = load_config()
+
+    if dev_root:
+        dev_root = str(Path(dev_root).expanduser().resolve())
+        cfg.defaults["dev_root"] = dev_root
+    elif not cfg.defaults.get("dev_root"):
+        click.echo("No dev_root configured. Pass the path to your tool repos:")
+        click.echo("  tw dev on /path/to/paperworlds")
+        raise SystemExit(1)
+
     cfg.defaults["mode"] = "developer"
+    resolved_root = Path(cfg.defaults["dev_root"])
+
+    if not resolved_root.exists():
+        click.echo(f"dev_root does not exist: {resolved_root}", err=True)
+        raise SystemExit(1)
 
     installed = []
     for name in _PYTHON_TOOLS:
-        repo_path = _find_repo_path(cfg, name)
-        if not repo_path:
-            click.echo(f"  {name}: no repo path in config, skipping")
-            click.echo(f"    add it with: tw config set repos.{name}.path /path/to/{name}")
-            continue
-        if not Path(repo_path).exists():
-            click.echo(f"  {name}: {repo_path} does not exist, skipping")
+        repo_path = resolved_root / name
+        if not repo_path.exists():
+            click.echo(f"  {name}: {repo_path} not found, skipping")
             continue
 
         click.echo(f"  {name}: installing editable from {repo_path}")
         result = subprocess.run(
-            ["uv", "tool", "install", "-e", repo_path, "--force"],
+            ["uv", "tool", "install", "-e", str(repo_path), "--force"],
             capture_output=True,
             text=True,
         )
@@ -466,10 +502,7 @@ def dev_on() -> None:
             click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
 
     save_config(cfg)
-    if installed:
-        click.echo(f"\nDeveloper mode enabled. {len(installed)} tool(s) installed editable.")
-    else:
-        click.echo("\nDeveloper mode enabled (no tools installed — add repos to config).")
+    click.echo(f"\nDeveloper mode enabled. {len(installed)}/{len(_PYTHON_TOOLS)} tool(s) installed.")
 
 
 @dev.command("off")
@@ -492,7 +525,7 @@ def dev_off() -> None:
             click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
 
     save_config(cfg)
-    click.echo("\nUser mode restored.")
+    click.echo("\nUser mode restored. dev_root preserved (run `tw dev on` to re-enable).")
 
 
 @dev.command("reinstall")
@@ -504,9 +537,9 @@ def dev_reinstall() -> None:
         raise SystemExit(1)
 
     for name in _PYTHON_TOOLS:
-        repo_path = _find_repo_path(cfg, name)
+        repo_path = _dev_repo_path(cfg, name)
         if not repo_path or not Path(repo_path).exists():
-            click.echo(f"  {name}: skipping (no repo path)")
+            click.echo(f"  {name}: skipping (not found)")
             continue
         click.echo(f"  {name}: reinstalling from {repo_path}")
         result = subprocess.run(
@@ -518,19 +551,6 @@ def dev_reinstall() -> None:
             click.echo(f"  {name}: ok")
         else:
             click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
-
-
-def _find_repo_path(cfg: Any, tool_name: str) -> str | None:
-    """Find a local repo path for a tool from config repos."""
-    # Direct match by tool name
-    entry = cfg.repos.get(tool_name)
-    if entry and entry.path:
-        return entry.path
-    # Search by label
-    for _name, repo in cfg.repos.items():
-        if repo.label == tool_name:
-            return repo.path
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -675,6 +695,13 @@ def _install_posix_wrapper(rc_file: Path, marker: str, content: str) -> None:
 
 
 def _detect_shell() -> str:
+    """Detect the user's active shell.
+
+    Checks FISH_VERSION first (set by fish), then falls back to $SHELL.
+    $SHELL is the login shell, which may differ from the running shell.
+    """
+    if os.environ.get("FISH_VERSION"):
+        return "fish"
     shell_path = os.environ.get("SHELL", "")
     if "fish" in shell_path:
         return "fish"
