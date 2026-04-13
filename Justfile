@@ -33,10 +33,9 @@ status:
 shell *FLAGS:
     uv run textworkspace shell {{ FLAGS }}
 
-# Install fish wrapper
-fish-install:
-    uv run textworkspace shell --fish > ~/.config/fish/functions/tw.fish
-    @echo "Installed → ~/.config/fish/functions/tw.fish"
+# Install shell wrapper + completions (auto-detects shell)
+shell-install:
+    uv run textworkspace shell install
 
 # Show current config
 config:

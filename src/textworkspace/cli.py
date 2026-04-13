@@ -466,20 +466,20 @@ def switch(profile: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
-@main.command()
+@main.group(invoke_without_command=True)
 @click.option("--fish", "shell_type", flag_value="fish", help="Output fish shell wrapper.")
 @click.option("--bash", "shell_type", flag_value="bash", help="Output bash shell wrapper.")
 @click.option("--zsh", "shell_type", flag_value="zsh", help="Output zsh shell wrapper.")
-def shell(shell_type: str | None) -> None:
-    """Generate shell wrapper functions for tw and xtw.
+@click.pass_context
+def shell(ctx: click.Context, shell_type: str | None) -> None:
+    """Shell wrappers and completions for tw.
 
-    Prints shell functions that handle the __TW_EVAL__ protocol for
-    `tw switch`. Install by appending to your shell config:
-
-      fish: tw shell --fish > ~/.config/fish/functions/tw.fish
-      bash: tw shell --bash >> ~/.bashrc
-      zsh:  tw shell --zsh  >> ~/.zshrc
+    Without a subcommand, prints the wrapper to stdout (for piping).
+    Use `tw shell install` to install directly.
     """
+    if ctx.invoked_subcommand is not None:
+        return
+
     from textworkspace.shell import generate_bash, generate_fish, generate_zsh
 
     if shell_type is None:
@@ -487,6 +487,64 @@ def shell(shell_type: str | None) -> None:
 
     generators = {"fish": generate_fish, "bash": generate_bash, "zsh": generate_zsh}
     click.echo(generators[shell_type]())
+
+
+@shell.command()
+@click.option("--fish", "shell_type", flag_value="fish", help="Install for fish.")
+@click.option("--bash", "shell_type", flag_value="bash", help="Install for bash.")
+@click.option("--zsh", "shell_type", flag_value="zsh", help="Install for zsh.")
+def install(shell_type: str | None) -> None:
+    """Install shell wrappers and completions.
+
+    Detects your shell and writes the appropriate config:
+
+      fish: ~/.config/fish/functions/tw.fish
+      bash: appends to ~/.bashrc
+      zsh:  appends to ~/.zshrc
+    """
+    from textworkspace.shell import generate_bash, generate_fish, generate_zsh
+
+    if shell_type is None:
+        shell_type = _detect_shell()
+
+    if shell_type == "fish":
+        target = Path.home() / ".config" / "fish" / "functions" / "tw.fish"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(generate_fish())
+        click.echo(f"Installed fish wrapper + completions -> {target}")
+        click.echo("Run `source ~/.config/fish/functions/tw.fish` or open a new terminal.")
+    elif shell_type == "bash":
+        target = Path.home() / ".bashrc"
+        marker = "# textworkspace shell wrapper"
+        _install_posix_wrapper(target, marker, generate_bash())
+        click.echo(f"Installed bash wrapper + completions -> {target}")
+        click.echo("Run `source ~/.bashrc` or open a new terminal.")
+    elif shell_type == "zsh":
+        target = Path.home() / ".zshrc"
+        marker = "# textworkspace shell wrapper"
+        _install_posix_wrapper(target, marker, generate_zsh())
+        click.echo(f"Installed zsh wrapper + completions -> {target}")
+        click.echo("Run `source ~/.zshrc` or open a new terminal.")
+
+
+def _install_posix_wrapper(rc_file: Path, marker: str, content: str) -> None:
+    """Install or replace a wrapper block in a shell rc file."""
+    end_marker = "# end textworkspace shell wrapper"
+    block = f"{marker}\n{content}{end_marker}\n"
+
+    if rc_file.exists():
+        existing = rc_file.read_text()
+        if marker in existing:
+            import re
+            pattern = re.escape(marker) + r".*?" + re.escape(end_marker) + r"\n?"
+            updated = re.sub(pattern, block, existing, flags=re.DOTALL)
+            rc_file.write_text(updated)
+            return
+        # Append
+        with rc_file.open("a") as f:
+            f.write(f"\n{block}")
+    else:
+        rc_file.write_text(block)
 
 
 def _detect_shell() -> str:
