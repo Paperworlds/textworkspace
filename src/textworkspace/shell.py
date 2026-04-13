@@ -5,24 +5,25 @@ from __future__ import annotations
 # Main tw wrapper that handles __TW_EVAL__ protocol for env-setting commands
 TW_WRAPPER = """\
 function tw
-    set -lx __TW_WRAPPER__ 1
-    set -l out (command textworkspace $argv)
-    set -l status_code $status
-    if test $status_code -eq 0
-        # Check if output contains eval directives (__TW_EVAL__ protocol)
+    # Only capture output for 'switch' (needs __TW_EVAL__ to set env in parent shell).
+    # All other commands run directly so interactive prompts and streaming output work.
+    if test (count $argv) -gt 0; and test "$argv[1]" = switch
+        set -lx __TW_WRAPPER__ 1
+        set -l out (command textworkspace $argv)
+        set -l status_code $status
+        if test $status_code -ne 0
+            printf '%s\\n' $out >&2
+            return $status_code
+        end
         if test (count $out) -gt 0; and string match -q '__TW_EVAL__*' $out[1]
-            # Skip the __TW_EVAL__ marker, eval the rest
             for line in $out[2..-1]
                 eval $line
             end
         else
-            # Normal output, just print it
             printf '%s\\n' $out
         end
     else
-        # Command failed, print any error output
-        printf '%s\\n' $out >&2
-        return $status_code
+        command textworkspace $argv
     end
 end
 """
