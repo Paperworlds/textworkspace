@@ -1,0 +1,43 @@
+id: "009"
+title: "README, CHANGELOG, and release prep"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.50
+depends_on: ["007", "008"]
+
+context: |
+  Final polish for v0.1.0 release.
+
+  README.md structure (reference textaccounts and textsessions READMEs):
+  - One-line description
+  - Quick start (pipx install, tw init, tw status)
+  - CLI reference table (all commands with descriptions)
+  - Combo examples (workday, shutdown, custom)
+  - Combo sharing (install, export, community repo)
+  - Fish shell setup
+  - Configuration (config.yaml, combos.yaml)
+  - License (EL2)
+
+  CHANGELOG.md:
+  - ## [v0.1.0] with all features listed
+
+  Verify:
+  - All tests pass
+  - tw --help shows complete command list
+  - tw init runs without errors on clean config
+  - tw doctor runs and reports status
+  - README examples are accurate
+
+steps:
+  - name: readme
+    do: "Write README.md with quick start, CLI reference, combo examples, fish setup, config docs"
+    check: "README covers all features accurately"
+  - name: changelog
+    do: "Write CHANGELOG.md with v0.1.0 entries"
+    check: "All implemented features listed"
+  - name: verify
+    do: "Run full test suite, verify tw --help, tw init, tw doctor all work"
+    check: "All tests pass, all commands functional"
+  - name: commit
+    do: "Commit: 'docs: README and CHANGELOG for v0.1.0 release'"

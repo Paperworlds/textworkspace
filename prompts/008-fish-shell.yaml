@@ -1,0 +1,56 @@
+id: "008"
+title: "Fish shell wrapper functions"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.50
+depends_on: ["004"]
+
+context: |
+  Generate fish shell functions for env-setting commands. Same pattern as
+  textaccounts' `ta` wrapper.
+
+  `tw switch <profile>` needs to set CLAUDE_CONFIG_DIR in the parent shell,
+  which a subprocess can't do. Solution: fish function that evals output.
+
+  Implement `tw shell --fish` that prints installable fish functions:
+
+  ```fish
+  function tw
+      set -l out (command textworkspace $argv)
+      if test $status -eq 0
+          # Check if output contains eval directives
+          if string match -q '__TW_EVAL__*' $out[1]
+              for line in $out[2..-1]
+                  eval $line
+              end
+          else
+              printf '%s\n' $out
+          end
+      end
+  end
+
+  function xtw
+      tw $argv
+  end
+  ```
+
+  When `tw switch` runs, if it detects it's not inside the fish wrapper,
+  print a hint: "Run: tw shell --fish >> ~/.config/fish/functions/tw.fish"
+
+  Also generate xta, xts, xtp, xsv, xpr, xtm aliases for all tools.
+
+  `tw init` should offer to install these fish functions automatically.
+
+steps:
+  - name: shell-generation
+    do: "Implement tw shell --fish that outputs fish function definitions for tw, xtw, and all x-aliases"
+    check: "tw shell --fish prints valid fish function syntax"
+  - name: eval-protocol
+    do: "Add __TW_EVAL__ output protocol to tw switch so the fish wrapper can eval env changes"
+    check: "tw switch work outputs __TW_EVAL__ prefix + export commands"
+  - name: init-integration
+    do: "Add fish function installation step to tw init flow"
+    check: "tw init offers to write fish functions"
+  - name: commit
+    do: "Commit: 'feat: fish shell wrapper functions and x-aliases'"

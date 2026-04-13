@@ -1,0 +1,68 @@
+id: "006"
+title: "Combo sharing — install, export, search"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: ["005"]
+
+context: |
+  Extend the combo engine with sharing capabilities. Users can install combos
+  from local files, gist URLs, or GitHub repos.
+
+  Combo file format (standalone, for sharing):
+  ```yaml
+  name: data-eng-stack
+  author: paulie
+  description: Start the full data engineering MCP stack
+  tags: [data, mcp, airflow]
+  requires:
+    - textserve
+    - textproxy
+  steps:
+    - run: proxy start
+      skip_if: proxy.running
+    - run: servers start --tag data
+  ```
+
+  Installed combos get metadata header:
+  ```yaml
+  _source: gh:paperworlds/textcombos/data-eng-stack
+  _installed: 2026-04-13
+  _modified: false
+  ```
+
+  Commands:
+  - `tw combos install <source>` — local path, gist URL, or gh:org/repo[/name]
+    - Check `requires` against installed tools, warn if missing
+    - Save to combos.d/<name>.yaml with _source metadata
+  - `tw combos export <name>` — dump one combo as standalone YAML to stdout
+  - `tw combos export --all` — dump all user combos
+  - `tw combos update` — re-fetch all installed combos from source
+    - Skip modified combos with warning
+  - `tw combos search <query>` — search community repo (paperworlds/textcombos)
+    via GitHub API, match on name/tags/description
+  - `tw combos info <name>` — show description, requires, steps before installing
+  - `tw combos remove <name>` — delete from combos.d/
+
+  GitHub repo fetch: use httpx to GET raw YAML from
+  https://raw.githubusercontent.com/<org>/<repo>/main/<name>.yaml
+
+steps:
+  - name: install-command
+    do: "Implement tw combos install with local file, gist, and gh: sources. Add requires checking and _source metadata."
+    check: "tw combos install ./test.yaml saves to combos.d/ with metadata"
+  - name: export-command
+    do: "Implement tw combos export <name> and --all, outputting standalone YAML format"
+    check: "tw combos export workday prints valid standalone YAML"
+  - name: update-command
+    do: "Implement tw combos update — re-fetch from _source, skip if _modified"
+    check: "Update fetches from source, skips modified combos with warning"
+  - name: search-info
+    do: "Implement tw combos search and tw combos info via GitHub API"
+    check: "tw combos search data returns matching combos from community repo"
+  - name: test
+    do: "Add tests with mocked HTTP for install/update/search"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit: 'feat: combo sharing — install, export, search, update'"

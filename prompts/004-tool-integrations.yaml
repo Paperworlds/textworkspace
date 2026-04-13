@@ -1,0 +1,71 @@
+id: "004"
+title: "Integrate Python tools via direct import"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 2.00
+depends_on: ["002"]
+
+context: |
+  Wire the flat shortcut commands that integrate with Python tools via direct
+  import (not subprocess). Go tools use subprocess with --json output.
+
+  Integration pattern (same as textsessions uses for textaccounts):
+  ```python
+  try:
+      from textaccounts.api import switch, list_profiles, env_for_profile
+      _HAS_TEXTACCOUNTS = True
+  except ImportError:
+      _HAS_TEXTACCOUNTS = False
+  ```
+
+  Commands to implement:
+
+  1. `tw switch <profile>` — calls textaccounts.api.switch()
+     - Prints shell eval hint (actual env setting needs fish wrapper)
+     - Warns if textaccounts not installed
+
+  2. `tw sessions [query]` — calls textsessions API to list/search sessions
+     - Falls back to launching textsessions TUI if available
+     - Warns if textsessions not installed
+
+  3. `tw stats [--session ID]` — calls textproxy via HTTP API (localhost:<port>/stats)
+     or subprocess `textproxy stats --json`
+     - Warns if proxy not running
+
+  4. `tw serve <name|--tag>` — calls textserve binary via subprocess
+     - `tw serve` with no args shows running servers
+     - Warns if textserve binary not found
+
+  5. `tw status` — unified view combining all of the above:
+     ```
+      profile   work (CLAUDE_CONFIG_DIR=~/.claude-work)
+      proxy     running :9880 · 14.2k tokens this session
+      servers   3/5 running (airflow, graph, snowflake)
+      sessions  47 total · 3 active
+     ```
+
+  Each integration must degrade gracefully. Missing tool = one-line warning,
+  not a crash.
+
+steps:
+  - name: switch-command
+    do: "Implement tw switch with textaccounts import, graceful fallback, shell eval output"
+    check: "tw switch work prints env export, tw switch with missing textaccounts warns"
+  - name: sessions-command
+    do: "Implement tw sessions with textsessions import, fallback to subprocess launch"
+    check: "tw sessions lists recent sessions or warns if unavailable"
+  - name: stats-command
+    do: "Implement tw stats querying textproxy HTTP or binary"
+    check: "tw stats shows token data or warns if proxy not running"
+  - name: serve-command
+    do: "Implement tw serve dispatching to textserve binary"
+    check: "tw serve shows server status"
+  - name: status-command
+    do: "Implement tw status combining all integrations into unified view"
+    check: "tw status shows profile, proxy, servers, sessions in compact format"
+  - name: test
+    do: "Add tests with mocked imports and subprocesses for each command"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit: 'feat: tool integrations and unified status command'"

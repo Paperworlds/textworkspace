@@ -1,0 +1,61 @@
+id: "003"
+title: "Go binary bootstrap from GitHub releases"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: ["002"]
+
+context: |
+  Implement the mechanism to fetch, verify, and manage Go tool binaries
+  (textproxy, textserve) from GitHub releases.
+
+  Implementation in bootstrap.py:
+
+  Platform detection:
+  - platform.system() → darwin/linux
+  - platform.machine() → arm64/x86_64 → map to darwin-arm64, linux-amd64, etc.
+
+  Release URL pattern:
+  https://github.com/paperworlds/<tool>/releases/download/v<ver>/<tool>-v<ver>-<os>-<arch>.tar.gz
+
+  Storage layout:
+  ~/.local/share/textworkspace/
+  ├── bin/
+  │   ├── textproxy        → ../cache/textproxy-v0.2.0-darwin-arm64/textproxy
+  │   └── textserve        → ../cache/textserve-v0.1.0-darwin-arm64/textserve
+  └── cache/
+      ├── textproxy-v0.2.0-darwin-arm64/
+      └── textserve-v0.1.0-darwin-arm64/
+
+  Flow:
+  1. Query GitHub releases API for latest tag (httpx, no auth needed for public repos)
+  2. Download tarball + .sha256 sidecar
+  3. Verify checksum
+  4. Extract to cache dir
+  5. Symlink to bin/
+  6. Update config.yaml with version + bin path
+  7. Keep one previous version (delete older)
+
+  Commands:
+  - `tw update <tool>` — check + download if newer
+  - `tw update` — update all tools (Python via pipx self-update hint, Go via bootstrap)
+
+steps:
+  - name: platform-detection
+    do: "Implement platform/arch detection and release URL builder in bootstrap.py"
+    check: "Correct URLs generated for darwin-arm64 and linux-amd64"
+  - name: download-verify
+    do: "Implement download_binary() with httpx streaming download, sha256 verification, tarball extraction"
+    check: "Function downloads, verifies, and extracts a test tarball"
+  - name: symlink-management
+    do: "Implement install_binary() that creates symlinks and cleans old versions (keep 1 previous)"
+    check: "Symlink points to correct version, old versions cleaned"
+  - name: update-command
+    do: "Wire tw update [tool] in cli.py — checks GitHub for newer releases, downloads if available"
+    check: "tw update textproxy reports current vs latest version"
+  - name: test
+    do: "Add tests for platform detection, URL building, symlink management (mock HTTP calls)"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit: 'feat: Go binary bootstrap from GitHub releases'"

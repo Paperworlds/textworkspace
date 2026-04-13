@@ -1,0 +1,58 @@
+id: "002"
+title: "Implement shared config model"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: ["001"]
+
+context: |
+  Build the config layer that tracks installed tools, versions, and preferences.
+
+  Config lives at ~/.config/paperworlds/config.yaml:
+
+  ```yaml
+  tools:
+    textaccounts:
+      version: "0.3.1"
+      source: pypi
+    textproxy:
+      version: "0.2.0"
+      source: github
+      bin: ~/.local/share/textworkspace/bin/textproxy
+    textsessions:
+      version: "0.4.0"
+      source: pypi
+    textserve:
+      version: "0.1.0"
+      source: github
+      bin: ~/.local/share/textworkspace/bin/textserve
+
+  defaults:
+    profile: work
+    proxy_autostart: false
+  ```
+
+  Implementation in config.py:
+  - Dataclasses for ToolEntry, Config
+  - load_config() / save_config() with safe YAML round-trip
+  - Auto-create config dir and file on first access
+  - `tw config` command: print current config, `tw config edit` opens $EDITOR
+
+  Reference textsessions config patterns for consistency.
+
+steps:
+  - name: implement-config
+    do: "Implement Config and ToolEntry dataclasses in config.py with load/save/defaults"
+    check: "Config file created on first load, round-trips cleanly"
+  - name: config-command
+    do: "Wire tw config (show) and tw config edit ($EDITOR) in cli.py"
+    check: "tw config prints YAML, tw config edit opens editor"
+  - name: which-command
+    do: "Implement tw which <tool> — shows version, source, install path"
+    check: "tw which textaccounts shows version and source"
+  - name: test
+    do: "Add tests for config load/save/defaults, which command"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit: 'feat: shared config model and tw config/which commands'"

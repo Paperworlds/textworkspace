@@ -1,0 +1,88 @@
+id: "005"
+title: "Combo engine — YAML workflow recipes"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 2.00
+depends_on: ["004"]
+
+context: |
+  Build the combo execution engine in combos.py. Combos are YAML-defined
+  sequences of textworkspace commands that chain tool actions.
+
+  File locations:
+  - ~/.config/paperworlds/combos.yaml — user's own combos
+  - ~/.config/paperworlds/combos.d/ — installed combo files
+
+  Combo YAML format:
+  ```yaml
+  combos:
+    workday:
+      description: Switch to work, start core stack
+      builtin: false
+      args: [profile]
+      steps:
+        - run: accounts switch {profile}
+        - run: proxy start
+          skip_if: proxy.running
+        - run: servers start --tag core
+          only_if: accounts.active work
+      pre: ""
+      post: ""
+  ```
+
+  Implementation:
+
+  1. Combo loader:
+     - Load combos.yaml + all files in combos.d/
+     - Merge with resolution order: builtins < combos.d < user combos.yaml
+     - Detect name collisions, warn user
+
+  2. Step execution:
+     - Parse `run:` as textworkspace subcommand (split and invoke click command)
+     - Arg interpolation: replace `{argname}` from positional CLI args
+     - Sequential execution, stop on failure (unless --continue)
+     - `skip_if` / `only_if` conditions evaluated before each step
+
+  3. Condition evaluator:
+     - Fixed vocabulary: proxy.running, proxy.stopped, servers.running,
+       servers.none_running, accounts.active <name>
+     - Each condition maps to a check function (probe proxy port, query
+       textserve status, check CLAUDE_CONFIG_DIR)
+
+  4. CLI commands:
+     - `tw <combo-name> [args...]` — run a combo (registered as dynamic click commands)
+     - `tw combos list` — show all combos with descriptions
+     - `tw combos edit` — open combos.yaml in $EDITOR
+     - `tw combos add <name>` — interactive scaffold
+     - `tw --dry-run <combo-name>` — print steps without executing
+
+  5. Builtin combos shipped on `tw init`:
+     - `up`: proxy start + servers start --tag default
+     - `down`: servers stop --all + proxy stop
+     - `reset <profile>`: switch + restart proxy + restart servers
+
+steps:
+  - name: combo-loader
+    do: "Implement combo YAML loading, merging from combos.yaml + combos.d/, collision detection"
+    check: "Combos from both sources loaded, collisions warned"
+  - name: condition-evaluator
+    do: "Implement condition checks for skip_if/only_if (proxy.running, servers.running, accounts.active)"
+    check: "Conditions correctly evaluate against tool state"
+  - name: step-executor
+    do: "Implement sequential step execution with arg interpolation, skip_if/only_if, early exit, --continue flag"
+    check: "Combo runs steps in order, skips correctly, stops on failure"
+  - name: cli-commands
+    do: "Wire tw combos list/edit/add and dynamic combo command registration in click"
+    check: "tw combos list shows combos, tw <combo> executes"
+  - name: dry-run
+    do: "Implement --dry-run that prints planned steps with resolved conditions"
+    check: "tw --dry-run workday shows steps without executing"
+  - name: builtin-combos
+    do: "Create default combos.yaml with up/down/reset builtins, write on tw init"
+    check: "tw init creates combos.yaml, tw up/down work"
+  - name: test
+    do: "Add tests for loader, conditions, executor, dry-run"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit: 'feat: combo engine with conditions and builtins'"

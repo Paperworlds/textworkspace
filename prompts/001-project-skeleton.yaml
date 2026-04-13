@@ -1,0 +1,45 @@
+id: "001"
+title: "Scaffold Python project with CLI entry point"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: []
+
+context: |
+  Brand new repo. Create the full Python project skeleton for textworkspace —
+  the meta CLI and package manager for the Paperworlds text- stack.
+
+  Use the same project structure as textsessions (reference:
+  paperworlds/textsessions/pyproject.toml and src/ layout).
+
+  Key decisions:
+  - Package: textworkspace
+  - Binary entry point: textworkspace (click CLI)
+  - Python >=3.11
+  - Dependencies: click, pyyaml, httpx (for GitHub API / binary downloads)
+  - Optional deps: textaccounts, textsessions
+  - License: Elastic License 2.0
+  - src layout: src/textworkspace/
+
+  Module stubs to create (empty files with just imports/class shells):
+  - __init__.py (version string)
+  - cli.py (click group, --version flag)
+  - config.py (load/save ~/.config/paperworlds/config.yaml)
+  - combos.py (combo loading/execution engine)
+  - bootstrap.py (Go binary download/management)
+  - status.py (unified status display)
+  - shell.py (fish function generation)
+
+steps:
+  - name: scaffold-project
+    do: "Create pyproject.toml, src/textworkspace/ with all module stubs, README.md, LICENSE (EL2), CLAUDE.md"
+    check: "uv sync succeeds, textworkspace --version prints version"
+  - name: cli-entry
+    do: "Implement the click group in cli.py with --version flag and placeholder subcommands (init, status, doctor, update, switch, sessions, stats, serve, config, which)"
+    check: "textworkspace --help shows all subcommands"
+  - name: test-skeleton
+    do: "Create tests/ with test_cli.py that verifies --help and --version work"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit and push: 'feat: project skeleton with CLI entry point (v0.1.0)'"

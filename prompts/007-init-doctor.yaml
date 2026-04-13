@@ -1,0 +1,59 @@
+id: "007"
+title: "Guided init and doctor commands"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: ["003", "004", "005"]
+
+context: |
+  Implement the onboarding flow and health check.
+
+  `tw init` — guided first-run setup:
+  1. Create ~/.config/paperworlds/ structure
+  2. Detect already-installed tools (check PATH, try imports)
+  3. Walk through tools in dependency order:
+     a. textaccounts — ask to adopt existing profiles or skip
+     b. textproxy (optional) — offer to bootstrap Go binary
+     c. textsessions — check if installed, offer pip install
+     d. textserve (optional) — offer to bootstrap Go binary
+  4. Write initial config.yaml with discovered versions
+  5. Write default combos.yaml with builtin combos
+  6. Print summary of what's installed and next steps
+
+  `tw doctor` — full diagnostic:
+  - Check each tool: installed? correct version? binary exists? importable?
+  - Check config.yaml: valid? all referenced binaries exist?
+  - Check combos: valid YAML? all required tools available?
+  - Check fish functions: tw/xtw installed? ta/xta installed?
+  - Check proxy: port available? responding?
+  - Check servers: textserve binary? registry.yaml exists?
+  - Print pass/warn/fail for each check with fix suggestions
+
+  Doctor output format:
+  ```
+   textaccounts  0.3.1 via pypi                    ok
+   textproxy     0.2.0 via github binary            ok
+   textsessions  0.4.0 via pypi                    ok
+   textserve     not installed                      run: tw init
+   config        ~/.config/paperworlds/config.yaml  ok
+   combos        3 user + 2 installed               ok
+   fish          tw, xtw, ta, xta                   ok
+   proxy         :9880 responding                   ok
+  ```
+
+steps:
+  - name: tool-detection
+    do: "Implement detect_installed_tools() — check PATH, try Python imports, check binary paths from config"
+    check: "Correctly detects installed tools and their versions"
+  - name: init-flow
+    do: "Implement tw init with interactive prompts (click.confirm/prompt), dependency-ordered walkthrough"
+    check: "tw init creates config, detects tools, bootstraps binaries when confirmed"
+  - name: doctor-checks
+    do: "Implement tw doctor with structured checks — tool availability, config validity, fish functions, proxy, servers"
+    check: "tw doctor shows pass/warn/fail for each check with fix hints"
+  - name: test
+    do: "Add tests for tool detection and doctor checks (mock filesystem and imports)"
+    check: "uv run pytest tests/ -v passes"
+  - name: commit
+    do: "Commit: 'feat: guided init onboarding and doctor diagnostics'"
