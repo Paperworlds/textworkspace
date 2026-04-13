@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
+
 import click
 
 from textworkspace import __version__
+from textworkspace.config import CONFIG_FILE, config_as_yaml, load_config, save_config
 
 
 @click.group()
@@ -61,25 +66,41 @@ def serve() -> None:
     click.echo("serve: not yet implemented")
 
 
-@main.command("config")
-@click.argument("key", required=False)
-@click.argument("value", required=False)
-def config_cmd(key: str | None, value: str | None) -> None:
-    """Get or set a config value (key [value])."""
-    if key is None:
-        click.echo("config: not yet implemented — use 'textworkspace config <key> [value]'")
-        return
-    if value is None:
-        click.echo(f"config get {key}: not yet implemented")
-    else:
-        click.echo(f"config set {key}={value}: not yet implemented")
+@main.group("config", invoke_without_command=True)
+@click.pass_context
+def config_cmd(ctx: click.Context) -> None:
+    """Show or edit the config file."""
+    if ctx.invoked_subcommand is None:
+        cfg = load_config()
+        click.echo(config_as_yaml(cfg), nl=False)
+
+
+@config_cmd.command("show")
+def config_show() -> None:
+    """Print the current config as YAML."""
+    cfg = load_config()
+    click.echo(config_as_yaml(cfg), nl=False)
+
+
+@config_cmd.command("edit")
+def config_edit() -> None:
+    """Open the config file in $EDITOR."""
+    # Ensure the file exists before opening
+    load_config()
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(CONFIG_FILE)], check=False)
 
 
 @main.command()
-@click.argument("binary", required=False)
-def which(binary: str | None) -> None:
-    """Print the path of a managed binary."""
-    if binary is None:
-        click.echo("which: specify a binary name")
-        return
-    click.echo(f"which {binary}: not yet implemented")
+@click.argument("tool")
+def which(tool: str) -> None:
+    """Show version, source, and install path of a managed tool."""
+    cfg = load_config()
+    entry = cfg.tools.get(tool)
+    if entry is None:
+        click.echo(f"{tool}: not found in config", err=True)
+        raise SystemExit(1)
+    lines = [f"tool:    {tool}", f"version: {entry.version or '(unknown)'}", f"source:  {entry.source}"]
+    if entry.bin:
+        lines.append(f"bin:     {entry.bin}")
+    click.echo("\n".join(lines))
