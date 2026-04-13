@@ -9,7 +9,14 @@ import tempfile
 import click
 
 from textworkspace import __version__
-from textworkspace.config import CONFIG_FILE, config_as_yaml, load_config, save_config
+from textworkspace.bootstrap import (
+    BIN_DIR,
+    GITHUB_ORG,
+    download_binary,
+    install_binary,
+    latest_version,
+)
+from textworkspace.config import CONFIG_FILE, ToolEntry, config_as_yaml, load_config, save_config
 
 
 @click.group()
@@ -36,10 +43,61 @@ def doctor() -> None:
     click.echo("doctor: not yet implemented")
 
 
+_GO_TOOLS = ("textproxy", "textserve")
+
+
 @main.command()
-def update() -> None:
-    """Update all managed binaries and packages to latest versions."""
-    click.echo("update: not yet implemented")
+@click.argument("tool", required=False)
+def update(tool: str | None) -> None:
+    """Check for and install newer versions of managed binaries.
+
+    Pass TOOL to update a single Go binary (e.g. textproxy, textserve).
+    Omit TOOL to update all known Go tools.
+    """
+    tools = (tool,) if tool else _GO_TOOLS
+
+    cfg = load_config()
+    any_updated = False
+
+    for name in tools:
+        click.echo(f"Checking {name} …")
+        try:
+            latest = latest_version(name)
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"  {name}: could not fetch latest version — {exc}", err=True)
+            continue
+
+        current = cfg.tools.get(name)
+        current_ver = current.version if current else None
+
+        ver_display = current_ver or "(not installed)"
+        click.echo(f"  current: {ver_display}  latest: {latest}")
+
+        if current_ver and current_ver.lstrip("v") == latest.lstrip("v"):
+            click.echo(f"  {name}: already up to date")
+            continue
+
+        click.echo(f"  Downloading {name} {latest} …")
+        try:
+            download_binary(name, latest)
+            symlink = install_binary(name, latest)
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"  {name}: install failed — {exc}", err=True)
+            continue
+
+        # Persist version + bin path in config
+        cfg.tools[name] = ToolEntry(
+            version=latest.lstrip("v"),
+            source="github",
+            bin=str(symlink),
+        )
+        save_config(cfg)
+
+        click.echo(f"  {name}: installed {latest} → {symlink}")
+        any_updated = True
+
+    if not any_updated and not tool:
+        click.echo("All tools are up to date.")
 
 
 @main.command()
