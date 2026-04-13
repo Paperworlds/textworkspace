@@ -309,13 +309,7 @@ dependencies = [
     { name = "click" },
     { name = "httpx" },
     { name = "pyyaml" },
-]
-
-[package.optional-dependencies]
-accounts = [
     { name = "textaccounts" },
-]
-sessions = [
     { name = "textsessions" },
 ]
 
@@ -329,10 +323,9 @@ requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "textaccounts", marker = "extra == 'accounts'", git = "https://github.com/paperworlds/textaccounts.git" },
-    { name = "textsessions", marker = "extra == 'sessions'", git = "https://github.com/paperworlds/textsessions.git" },
+    { name = "textaccounts", git = "https://github.com/paperworlds/textaccounts.git" },
+    { name = "textsessions", git = "https://github.com/paperworlds/textsessions.git" },
 ]
-provides-extras = ["accounts", "sessions"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]
