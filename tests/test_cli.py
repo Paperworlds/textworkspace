@@ -964,8 +964,8 @@ def test_doctor_checks_missing_config(tmp_path, monkeypatch):
     assert "tw init" in (tool_results["config"].fix or "")
 
 
-def test_doctor_checks_fish_partial(tmp_path, monkeypatch):
-    """run_doctor_checks warns when only some fish functions are installed."""
+def test_doctor_checks_fish_present(tmp_path, monkeypatch):
+    """run_doctor_checks shows ok when tw.fish is installed."""
     import textworkspace.doctor as _doc
 
     monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools())
@@ -977,12 +977,11 @@ def test_doctor_checks_fish_partial(tmp_path, monkeypatch):
     monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
     monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
 
-    # Only tw.fish present
     (tmp_path / "tw.fish").touch()
 
     results = run_doctor_checks()
     fish_result = next(r for r in results if r.label == "fish")
-    assert fish_result.status == "warn"
+    assert fish_result.status == "ok"
     assert "tw" in fish_result.detail
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import json
 import shutil
 import socket
 import subprocess
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-_TEXTPROXY_PORT = 9880
+_TEXTPROXY_DEFAULT_PORT = 9880
 _FISH_FUNCTIONS_DIR = Path.home() / ".config" / "fish" / "functions"
 
 _PYPI_TOOLS = ("textaccounts", "textsessions")
@@ -230,26 +231,26 @@ def run_doctor_checks() -> list[CheckResult]:
         ))
 
     # --- Fish functions check ---
-    _fish_fns = ["tw", "xtw", "ta", "xta"]
-    found = [fn for fn in _fish_fns if (_FISH_FUNCTIONS_DIR / f"{fn}.fish").exists()]
-    missing = [fn for fn in _fish_fns if fn not in found]
-    if not missing:
-        results.append(CheckResult(label="fish", detail=", ".join(found), status="ok"))
+    # tw is the only fish function needed (for __TW_EVAL__ protocol);
+    # xtw, ta, xta are binary entry points, not fish functions.
+    if (_FISH_FUNCTIONS_DIR / "tw.fish").exists():
+        results.append(CheckResult(label="fish", detail="tw.fish installed", status="ok"))
     else:
-        detail = f"found: {', '.join(found)}" if found else "no functions installed"
-        if missing:
-            detail += f"; missing: {', '.join(missing)}"
-        results.append(CheckResult(label="fish", detail=detail, status="warn", fix="run: tw shell install"))
+        results.append(CheckResult(
+            label="fish", detail="tw.fish not found", status="warn",
+            fix="run: tw shell --fish > ~/.config/fish/functions/tw.fish",
+        ))
 
     # --- Proxy check ---
-    if _is_port_responding(_TEXTPROXY_PORT):
-        results.append(CheckResult(label="proxy", detail=f":{_TEXTPROXY_PORT} responding", status="ok"))
+    proxy_port = _get_textproxy_port()
+    if _is_port_responding(proxy_port):
+        results.append(CheckResult(label="proxy", detail=f":{proxy_port} responding", status="ok"))
     else:
         tp = tools.get("textproxy")
         if tp and tp.installed:
             results.append(CheckResult(
                 label="proxy",
-                detail=f":{_TEXTPROXY_PORT} not responding",
+                detail=f":{proxy_port} not responding",
                 status="warn",
                 fix="run: textproxy start",
             ))
@@ -280,6 +281,15 @@ def run_doctor_checks() -> list[CheckResult]:
         ))
 
     return results
+
+
+def _get_textproxy_port() -> int:
+    config_path = Path.home() / ".config" / "textproxy" / "config.json"
+    try:
+        data = json.loads(config_path.read_text())
+        return int(data["port"])
+    except Exception:  # noqa: BLE001
+        return _TEXTPROXY_DEFAULT_PORT
 
 
 def _is_port_responding(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:

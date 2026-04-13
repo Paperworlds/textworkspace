@@ -534,7 +534,17 @@ def sessions(query: str | None, limit: int) -> None:
 _TEXTPROXY_DEFAULT_PORT = 9880
 
 
-def _proxy_stats_http(port: int = _TEXTPROXY_DEFAULT_PORT) -> dict:
+def _get_textproxy_port() -> int:
+    import json
+    config_path = Path.home() / ".config" / "textproxy" / "config.json"
+    try:
+        data = json.loads(config_path.read_text())
+        return int(data["port"])
+    except Exception:  # noqa: BLE001
+        return _TEXTPROXY_DEFAULT_PORT
+
+
+def _proxy_stats_http(port: int = 0) -> dict:
     """Query textproxy HTTP API; raises on any error."""
     import httpx  # local import — optional dep
 
@@ -572,12 +582,14 @@ def _fmt_tokens(n: int | float | None) -> str:
 
 @main.command()
 @click.option("--session", "session_id", default=None, help="Filter stats for a specific session ID.")
-@click.option("--port", default=_TEXTPROXY_DEFAULT_PORT, show_default=True, help="textproxy HTTP port.")
-def stats(session_id: str | None, port: int) -> None:
+@click.option("--port", default=None, type=int, help="textproxy HTTP port (reads from textproxy config by default).")
+def stats(session_id: str | None, port: int | None) -> None:
     """Show token usage and stats from the textproxy.
 
     Queries the HTTP API first; falls back to `textproxy stats --json`.
     """
+    if port is None:
+        port = _get_textproxy_port()
     data: dict | None = None
 
     try:
@@ -746,7 +758,7 @@ def _status_profile() -> str:
 
 
 def _status_proxy() -> str:
-    port = _TEXTPROXY_DEFAULT_PORT
+    port = _get_textproxy_port()
     try:
         data = _proxy_stats_http(port)
         tokens = data.get("tokens", data.get("total_tokens"))
