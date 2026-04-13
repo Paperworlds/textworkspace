@@ -1122,3 +1122,214 @@ def test_doctor_cli_output_format(tmp_path, monkeypatch):
     assert "ok" in result.output
     assert "warn" in result.output
     assert "tw update textproxy" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for bugs found during v0.1.x development
+# ---------------------------------------------------------------------------
+
+
+def test_switch_always_outputs_tw_eval_protocol(monkeypatch):
+    """tw switch must always output __TW_EVAL__ protocol line.
+
+    Regression: previously, when __TW_WRAPPER__=1 was set, switch
+    omitted the __TW_EVAL__ prefix. The fish wrapper then printed
+    the raw 'set -gx' lines via printf instead of eval-ing them.
+    """
+    monkeypatch.setattr("textworkspace.cli._HAS_TEXTACCOUNTS", True)
+    monkeypatch.setattr(
+        "textworkspace.cli.env_for_profile",
+        lambda p: {"CLAUDE_CONFIG_DIR": "/tmp/test"},
+    )
+
+    runner = CliRunner()
+
+    # Without wrapper env
+    result = runner.invoke(main, ["switch", "test"])
+    assert result.exit_code == 0
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "__TW_EVAL__"
+    assert any("CLAUDE_CONFIG_DIR" in l for l in lines[1:])
+
+    # With wrapper env (was the bug — used to omit __TW_EVAL__)
+    monkeypatch.setenv("__TW_WRAPPER__", "1")
+    result = runner.invoke(main, ["switch", "test"])
+    assert result.exit_code == 0
+    lines = result.output.strip().split("\n")
+    assert lines[0] == "__TW_EVAL__"
+
+
+def test_sessions_reads_yaml_indexes(tmp_path, monkeypatch):
+    """tw status should read session YAML indexes, not _cache.json.
+
+    Regression: load_sessions() previously read from _cache.json which
+    doesn't exist until textsessions explicitly builds it. Now reads
+    the YAML index files directly.
+    """
+    import yaml as _yaml
+
+    # Create fake YAML index files
+    state_dir = tmp_path / "claude-sessions"
+    state_dir.mkdir()
+
+    sessions = {
+        "abc-123": {"name": "test-session", "last_active": "2026-04-13 10:00"},
+        "def-456": {"name": "other-session", "last_active": "2026-04-12 09:00"},
+    }
+    with (state_dir / "-test-repo.yaml").open("w") as f:
+        _yaml.dump(sessions, f)
+
+    # _cache.json intentionally does NOT exist
+
+    monkeypatch.setattr("textworkspace.cli._HAS_TEXTSESSIONS", True)
+    monkeypatch.setattr("textworkspace.cli._TS_STATE_DIR", state_dir)
+
+    from textworkspace.cli import load_sessions
+    items = load_sessions()
+    assert len(items) == 2
+    assert any(i["name"] == "test-session" for i in items)
+    assert all("id" in i for i in items)
+
+
+def test_sessions_skips_underscore_files(tmp_path, monkeypatch):
+    """YAML files starting with _ (like _cache.json) should be skipped."""
+    import yaml as _yaml
+
+    state_dir = tmp_path / "claude-sessions"
+    state_dir.mkdir()
+
+    # Real sessions
+    with (state_dir / "-test-repo.yaml").open("w") as f:
+        _yaml.dump({"abc": {"name": "s1", "last_active": "2026-04-13"}}, f)
+
+    # Underscore file should be ignored
+    with (state_dir / "_meta.yaml").open("w") as f:
+        _yaml.dump({"should": {"name": "ignored"}}, f)
+
+    monkeypatch.setattr("textworkspace.cli._HAS_TEXTSESSIONS", True)
+    monkeypatch.setattr("textworkspace.cli._TS_STATE_DIR", state_dir)
+
+    from textworkspace.cli import load_sessions
+    items = load_sessions()
+    assert len(items) == 1
+    assert items[0]["name"] == "s1"
+
+
+def test_status_active_today_count(tmp_path, monkeypatch):
+    """tw status should show 'active today' count from last_active field."""
+    import yaml as _yaml
+    from datetime import date
+
+    state_dir = tmp_path / "claude-sessions"
+    state_dir.mkdir()
+
+    today = date.today().isoformat()
+    sessions = {
+        "a": {"name": "today-session", "last_active": f"{today} 10:00"},
+        "b": {"name": "yesterday-session", "last_active": "2020-01-01 09:00"},
+        "c": {"name": "also-today", "last_active": f"{today} 14:30"},
+    }
+    with (state_dir / "-test.yaml").open("w") as f:
+        _yaml.dump(sessions, f)
+
+    monkeypatch.setattr("textworkspace.cli._HAS_TEXTSESSIONS", True)
+    monkeypatch.setattr("textworkspace.cli._TS_STATE_DIR", state_dir)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["status"])
+    assert "3 total" in result.output
+    assert "2 active today" in result.output
+
+
+def test_detect_shell_prefers_fish_version(monkeypatch):
+    """Shell detection should check FISH_VERSION before $SHELL.
+
+    Regression: $SHELL returns the login shell (often /bin/zsh on macOS)
+    even when the user is running fish. FISH_VERSION is only set inside fish.
+    """
+    from textworkspace.cli import _detect_shell
+
+    # FISH_VERSION set -> fish, even if SHELL says zsh
+    monkeypatch.setenv("FISH_VERSION", "3.7.0")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    assert _detect_shell() == "fish"
+
+    # No FISH_VERSION, SHELL is zsh -> zsh
+    monkeypatch.delenv("FISH_VERSION")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    assert _detect_shell() == "zsh"
+
+    # No FISH_VERSION, SHELL is fish -> fish
+    monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
+    assert _detect_shell() == "fish"
+
+
+def test_shell_install_fish(tmp_path, monkeypatch):
+    """tw shell install --fish writes to the fish functions directory."""
+    fish_dir = tmp_path / ".config" / "fish" / "functions"
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shell", "install", "--fish"])
+    assert result.exit_code == 0
+    assert "Installed fish wrapper" in result.output
+
+    tw_fish = fish_dir / "tw.fish"
+    assert tw_fish.exists()
+    content = tw_fish.read_text()
+    assert "function tw" in content
+    assert "_textworkspace_completion" in content
+
+
+def test_dev_on_requires_dev_root(tmp_path, monkeypatch):
+    """tw dev on without dev_root should ask for it."""
+    config_dir = tmp_path / ".config" / "paperworlds"
+    config_dir.mkdir(parents=True)
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", config_dir)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["dev", "on"])
+    assert result.exit_code != 0
+    assert "dev_root" in result.output.lower() or "path" in result.output.lower()
+
+
+def test_dev_on_with_dev_root(tmp_path, monkeypatch):
+    """tw dev on <path> should set dev_root and attempt installs."""
+    config_dir = tmp_path / ".config" / "paperworlds"
+    config_dir.mkdir(parents=True)
+    config_file = config_dir / "config.yaml"
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", config_dir)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_file)
+
+    # Create fake tool repos
+    dev_root = tmp_path / "paperworlds"
+    dev_root.mkdir()
+    (dev_root / "textaccounts").mkdir()
+    (dev_root / "textsessions").mkdir()
+
+    # Mock uv tool install to succeed
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda cmd, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+    )
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/local/bin/{name}")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["dev", "on", str(dev_root)])
+    assert result.exit_code == 0
+    assert "Developer mode enabled" in result.output
+
+    # Check config was saved with dev_root
+    cfg = _yaml_load(config_file)
+    assert cfg["defaults"]["mode"] == "developer"
+    assert cfg["defaults"]["dev_root"] == str(dev_root)
+
+
+def _yaml_load(path):
+    import yaml as _y
+    with open(path) as f:
+        return _y.safe_load(f)

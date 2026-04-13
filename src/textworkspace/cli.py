@@ -593,18 +593,14 @@ def switch(profile: str | None) -> None:
     # Collect export commands
     exports = [f"set -gx {key} {val!r}" for key, val in env.items()]
 
-    # Check if we're running inside the fish wrapper by looking for a marker env var
-    inside_wrapper = os.environ.get("__TW_WRAPPER__") == "1"
+    if not exports:
+        return
 
-    if not inside_wrapper and exports:
-        # Not inside wrapper: output __TW_EVAL__ protocol for wrapper to handle
-        click.echo("__TW_EVAL__")
-        for export in exports:
-            click.echo(export)
-    else:
-        # Inside wrapper or no exports: output directly
-        for export in exports:
-            click.echo(export)
+    # Always output __TW_EVAL__ protocol — the shell wrapper captures
+    # stdout and evals the lines after the marker.
+    click.echo("__TW_EVAL__")
+    for export in exports:
+        click.echo(export)
 
 
 
@@ -990,9 +986,24 @@ def _status_profile() -> str:
         return "(textaccounts not installed)"
     try:
         profiles = list_profiles()
-        active = os.environ.get("TW_PROFILE", profiles[0] if profiles else "default")
-        env = os.environ.get("CLAUDE_CONFIG_DIR", "")
-        env_part = f" (CLAUDE_CONFIG_DIR={env})" if env else ""
+        current_config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+
+        # Infer active profile by matching CLAUDE_CONFIG_DIR against profiles
+        active = "default"
+        for p in profiles:
+            try:
+                env = env_for_profile(p)
+                if env.get("CLAUDE_CONFIG_DIR") == current_config_dir:
+                    active = p
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        else:
+            # No match — fall back to first profile
+            if profiles:
+                active = profiles[0]
+
+        env_part = f" (CLAUDE_CONFIG_DIR={current_config_dir})" if current_config_dir else ""
         return f"{active}{env_part}"
     except Exception as exc:  # noqa: BLE001
         return f"(error: {exc})"
