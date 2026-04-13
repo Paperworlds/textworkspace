@@ -167,6 +167,97 @@ tw sync [--dry-run]
 - Syncing non-repo settings (proxy, integrations, UI prefs)
 - Auto-sync on `tw init` (manual `tw sync` only)
 
+## Versioning
+
+### Version sources
+
+| Tool | Canonical version | Published to |
+|------|------------------|-------------|
+| textaccounts | `pyproject.toml` | PyPI |
+| textsessions | `pyproject.toml` | PyPI |
+| textworkspace | `pyproject.toml` | PyPI (planned) |
+| textproxy | Go `ldflags` at build time | GitHub Releases |
+| textserve | Go `ldflags` at build time | GitHub Releases |
+
+### How `tw doctor` gets versions
+
+1. **Python tools**: run `<tool> --version` (preferred), fall back to
+   `importlib.metadata.version()`. Binary output is authoritative because
+   `uv tool` installs have independent venvs — textworkspace's own venv
+   may have stale metadata.
+2. **Go tools**: check config `tools.<name>.version` (set by `tw update`),
+   fall back to `<tool> --version`.
+
+### Tagging releases
+
+```bash
+# In the tool's repo:
+# 1. Bump version in pyproject.toml (or Go ldflags)
+# 2. Commit: "release: vX.Y.Z"
+# 3. Tag and push
+git tag vX.Y.Z
+git push && git push --tags
+```
+
+PyPI publishing is manual for now (`uv build && uv publish`). GitHub
+Releases for Go tools are created by `tw update` downloading the binary.
+
+## Developer workflow
+
+### Installing tools for development
+
+Each tool is installed as an **editable uv tool**, pointing at the local
+checkout. This means changes to source take effect immediately without
+reinstalling.
+
+```bash
+# In each tool's repo:
+uv tool install -e . --force
+
+# Or via textworkspace's Justfile:
+cd textworkspace && just install
+```
+
+### Keeping versions in sync
+
+When you pull changes that bump a version in `pyproject.toml`, the
+installed binary still reports the old version until you reinstall:
+
+```bash
+# Re-install a single tool after pulling version bumps
+cd <tool-repo> && uv tool install -e . --force
+
+# Or reinstall all tools at once (from paperworlds root)
+for dir in textaccounts textsessions textworkspace; do
+    (cd $dir && uv tool install -e . --force)
+done
+```
+
+**Why not auto-sync?** Editable installs (`-e`) mean code changes take
+effect immediately, but version metadata is baked into the `.dist-info`
+at install time. This is a uv/pip limitation. The reinstall is only
+needed when `pyproject.toml` version changes — which is rare (only at
+release time).
+
+### `tw doctor` vs reality
+
+`tw doctor` now runs `<tool> --version` to get the actual installed
+version, so it reflects what's really on PATH even if textworkspace's
+own venv has stale metadata. If doctor shows a wrong version, reinstall
+the tool.
+
+### Config `tools` section
+
+The `tools` section in `~/.config/paperworlds/config.yaml` records
+version and source at the time of `tw init` or `tw update`. These may
+go stale. They are used:
+
+- By `tw update` to check if a newer version is available (Go tools)
+- By doctor as a fallback if binary `--version` fails
+- By combos to check tool requirements
+
+Run `tw init` to refresh them.
+
 ## Adding a new repo to the stack
 
 1. Decide: Python package or Go binary
