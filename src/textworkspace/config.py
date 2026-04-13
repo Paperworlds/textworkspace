@@ -11,7 +11,7 @@ import yaml
 CONFIG_DIR = Path.home() / ".config" / "paperworlds"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
-_DEFAULT_DEFAULTS: dict = {"profile": "default", "proxy_autostart": False}
+_DEFAULT_DEFAULTS: dict = {"profile": "default", "proxy_autostart": False, "mode": "user"}
 
 STATE_DIR = Path.home() / ".local" / "state" / "paperworlds"
 
@@ -41,7 +41,7 @@ class Config:
     repos: dict[str, RepoEntry] = field(default_factory=dict)
     dirs: SharedDirs = field(default_factory=SharedDirs)
     tools: dict[str, ToolEntry] = field(default_factory=dict)
-    defaults: dict = field(default_factory=lambda: {"profile": "default", "proxy_autostart": False})
+    defaults: dict = field(default_factory=lambda: {"profile": "default", "proxy_autostart": False, "mode": "user"})
 
 
 def _parse_repo(data: dict) -> RepoEntry:

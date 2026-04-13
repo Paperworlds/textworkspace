@@ -407,6 +407,133 @@ def which(tool: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw dev — developer mode
+# ---------------------------------------------------------------------------
+
+# Python tools that can be installed from local repos
+_PYTHON_TOOLS = ("textaccounts", "textsessions")
+
+
+@main.group(invoke_without_command=True)
+@click.pass_context
+def dev(ctx: click.Context) -> None:
+    """Developer mode — install tools from local repo checkouts.
+
+    `tw dev on`   — enable developer mode and install tools editable
+    `tw dev off`  — switch back to user mode (PyPI installs)
+    `tw dev`      — show current mode
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    cfg = load_config()
+    mode = cfg.defaults.get("mode", "user")
+    click.echo(f"mode: {mode}")
+    if mode == "developer":
+        for name in _PYTHON_TOOLS:
+            repo_path = _find_repo_path(cfg, name)
+            status = f"-> {repo_path}" if repo_path else "(no repo in config)"
+            click.echo(f"  {name}: {status}")
+
+
+@dev.command("on")
+def dev_on() -> None:
+    """Enable developer mode and install Python tools as editable from local repos."""
+    cfg = load_config()
+    cfg.defaults["mode"] = "developer"
+
+    installed = []
+    for name in _PYTHON_TOOLS:
+        repo_path = _find_repo_path(cfg, name)
+        if not repo_path:
+            click.echo(f"  {name}: no repo path in config, skipping")
+            click.echo(f"    add it with: tw config set repos.{name}.path /path/to/{name}")
+            continue
+        if not Path(repo_path).exists():
+            click.echo(f"  {name}: {repo_path} does not exist, skipping")
+            continue
+
+        click.echo(f"  {name}: installing editable from {repo_path}")
+        result = subprocess.run(
+            ["uv", "tool", "install", "-e", repo_path, "--force"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            click.echo(f"  {name}: ok")
+            installed.append(name)
+            cfg.tools[name] = ToolEntry(version="", source="dev", bin=shutil.which(name))
+        else:
+            click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
+
+    save_config(cfg)
+    if installed:
+        click.echo(f"\nDeveloper mode enabled. {len(installed)} tool(s) installed editable.")
+    else:
+        click.echo("\nDeveloper mode enabled (no tools installed — add repos to config).")
+
+
+@dev.command("off")
+def dev_off() -> None:
+    """Disable developer mode — reinstall tools from PyPI."""
+    cfg = load_config()
+    cfg.defaults["mode"] = "user"
+
+    for name in _PYTHON_TOOLS:
+        click.echo(f"  {name}: reinstalling from PyPI")
+        result = subprocess.run(
+            ["uv", "tool", "install", name, "--force"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            click.echo(f"  {name}: ok")
+            cfg.tools[name] = ToolEntry(version="", source="pypi", bin=shutil.which(name))
+        else:
+            click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
+
+    save_config(cfg)
+    click.echo("\nUser mode restored.")
+
+
+@dev.command("reinstall")
+def dev_reinstall() -> None:
+    """Re-install all dev tools (useful after pyproject.toml version bumps)."""
+    cfg = load_config()
+    if cfg.defaults.get("mode") != "developer":
+        click.echo("Not in developer mode. Run `tw dev on` first.")
+        raise SystemExit(1)
+
+    for name in _PYTHON_TOOLS:
+        repo_path = _find_repo_path(cfg, name)
+        if not repo_path or not Path(repo_path).exists():
+            click.echo(f"  {name}: skipping (no repo path)")
+            continue
+        click.echo(f"  {name}: reinstalling from {repo_path}")
+        result = subprocess.run(
+            ["uv", "tool", "install", "-e", repo_path, "--force"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            click.echo(f"  {name}: ok")
+        else:
+            click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
+
+
+def _find_repo_path(cfg: Any, tool_name: str) -> str | None:
+    """Find a local repo path for a tool from config repos."""
+    # Direct match by tool name
+    entry = cfg.repos.get(tool_name)
+    if entry and entry.path:
+        return entry.path
+    # Search by label
+    for _name, repo in cfg.repos.items():
+        if repo.label == tool_name:
+            return repo.path
+    return None
+
+
+# ---------------------------------------------------------------------------
 # tw switch <profile>
 # ---------------------------------------------------------------------------
 
