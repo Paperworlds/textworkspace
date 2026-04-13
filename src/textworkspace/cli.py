@@ -131,30 +131,141 @@ def main(ctx: click.Context, dry_run: bool) -> None:
 
 @main.command()
 def init() -> None:
-    """Initialise textworkspace config and install dependencies."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    """Guided first-run setup — detect tools, bootstrap binaries, write config."""
+    from textworkspace.doctor import detect_installed_tools
 
-    # Write default config if absent
-    if not CONFIG_FILE.exists():
-        load_config()
-        click.echo(f"  created {CONFIG_FILE}")
-    else:
-        click.echo(f"  config  {CONFIG_FILE} (exists)")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    click.echo("textworkspace init")
+    click.echo(f"  config dir: {CONFIG_DIR}")
+    click.echo()
+
+    # Detect already-installed tools
+    click.echo("Detecting installed tools…")
+    tools = detect_installed_tools()
+    for name, info in tools.items():
+        if info.installed:
+            ver = f" {info.version}" if info.version else ""
+            click.echo(f"  {name}{ver}  (already installed via {info.source})")
+        else:
+            click.echo(f"  {name}  not found")
+    click.echo()
+
+    # Load or create config
+    cfg = load_config()
+
+    # Walk through tools in dependency order
+    _init_textaccounts(cfg, tools)
+    click.echo()
+    _init_textproxy(cfg, tools)
+    click.echo()
+    _init_textsessions(cfg, tools)
+    click.echo()
+    _init_textserve(cfg, tools)
+    click.echo()
+
+    # Write config
+    save_config(cfg)
+    click.echo(f"  wrote config → {CONFIG_FILE}")
 
     # Write default combos.yaml if absent
     if not COMBOS_FILE.exists():
         COMBOS_FILE.write_text(DEFAULT_COMBOS_YAML)
-        click.echo(f"  created {COMBOS_FILE}")
+        click.echo(f"  wrote combos → {COMBOS_FILE}")
     else:
-        click.echo(f"  combos  {COMBOS_FILE} (exists)")
+        click.echo(f"  combos → {COMBOS_FILE} (exists)")
 
-    click.echo("init: done")
+    click.echo()
+    click.echo("Done. Run `tw doctor` to check your setup.")
+
+
+def _init_textaccounts(cfg: Any, tools: dict) -> None:
+    info = tools.get("textaccounts")
+    click.echo("textaccounts  (account profiles)")
+    if info and info.installed:
+        click.echo(f"  already installed ({info.version or '?'})")
+        cfg.tools["textaccounts"] = ToolEntry(
+            version=info.version or "",
+            source=info.source or "pypi",
+            bin=info.bin_path,
+        )
+    else:
+        click.echo("  not installed — install with: pip install textaccounts")
+
+
+def _init_textproxy(cfg: Any, tools: dict) -> None:
+    info = tools.get("textproxy")
+    click.echo("textproxy  (AI API proxy, optional)")
+    if info and info.installed:
+        click.echo(f"  already installed ({info.version or '?'})")
+        cfg.tools["textproxy"] = ToolEntry(
+            version=info.version or "",
+            source=info.source or "github",
+            bin=info.bin_path,
+        )
+    elif click.confirm("  Download textproxy binary from GitHub?", default=False):
+        _bootstrap_go_tool("textproxy", cfg)
+    else:
+        click.echo("  skipped")
+
+
+def _init_textsessions(cfg: Any, tools: dict) -> None:
+    info = tools.get("textsessions")
+    click.echo("textsessions  (session manager)")
+    if info and info.installed:
+        click.echo(f"  already installed ({info.version or '?'})")
+        cfg.tools["textsessions"] = ToolEntry(
+            version=info.version or "",
+            source=info.source or "pypi",
+            bin=info.bin_path,
+        )
+    else:
+        click.echo("  not installed — install with: pip install textsessions")
+
+
+def _init_textserve(cfg: Any, tools: dict) -> None:
+    info = tools.get("textserve")
+    click.echo("textserve  (server manager, optional)")
+    if info and info.installed:
+        click.echo(f"  already installed ({info.version or '?'})")
+        cfg.tools["textserve"] = ToolEntry(
+            version=info.version or "",
+            source=info.source or "github",
+            bin=info.bin_path,
+        )
+    elif click.confirm("  Download textserve binary from GitHub?", default=False):
+        _bootstrap_go_tool("textserve", cfg)
+    else:
+        click.echo("  skipped")
+
+
+def _bootstrap_go_tool(name: str, cfg: Any) -> None:
+    try:
+        click.echo(f"  fetching latest version of {name}…")
+        latest = latest_version(name)
+        click.echo(f"  downloading {name} {latest}…")
+        download_binary(name, latest)
+        symlink = install_binary(name, latest)
+        cfg.tools[name] = ToolEntry(version=latest.lstrip("v"), source="github", bin=str(symlink))
+        click.echo(f"  installed {name} {latest} → {symlink}")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  failed to install {name}: {exc}", err=True)
 
 
 @main.command()
 def doctor() -> None:
-    """Check that all required binaries and services are healthy."""
-    click.echo("doctor: not yet implemented")
+    """Full diagnostic — checks tools, config, combos, fish functions, proxy, servers."""
+    from textworkspace.doctor import run_doctor_checks
+
+    results = run_doctor_checks()
+
+    label_w = max(len(r.label) for r in results)
+    detail_w = max(len(r.detail) for r in results)
+
+    _icon = {"ok": "ok", "warn": "warn", "fail": "FAIL"}
+    for r in results:
+        icon = _icon.get(r.status, r.status)
+        fix_part = f"  →  {r.fix}" if r.fix else ""
+        click.echo(f"  {r.label:<{label_w}}  {r.detail:<{detail_w}}  {icon}{fix_part}")
 
 
 # ---------------------------------------------------------------------------

@@ -761,3 +761,352 @@ def test_cli_combos_info_mocked(monkeypatch):
     assert "my-stack" in result.output
     assert "paulie" in result.output
     assert "textserve" in result.output
+
+
+# ---------------------------------------------------------------------------
+# doctor.py — detect_installed_tools
+# ---------------------------------------------------------------------------
+
+from textworkspace.doctor import (
+    CheckResult,
+    ToolInfo,
+    _detect_python_tool,
+    detect_installed_tools,
+    run_doctor_checks,
+    _is_port_responding,
+)
+
+
+def test_detect_python_tool_found(monkeypatch):
+    """detect_python_tool returns installed=True when module is importable."""
+    import importlib.util as _ilu
+
+    fake_spec = object()  # truthy non-None
+    monkeypatch.setattr(_ilu, "find_spec", lambda name: fake_spec)
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "1.2.3")
+
+    info = _detect_python_tool("textaccounts")
+    assert info.installed is True
+    assert info.importable is True
+    assert info.version == "1.2.3"
+    assert info.source == "pypi"
+
+
+def test_detect_python_tool_missing(monkeypatch):
+    """detect_python_tool returns installed=False when module is not found."""
+    import importlib.util as _ilu
+
+    monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
+    import shutil as _sh
+    monkeypatch.setattr(_sh, "which", lambda name: None)
+
+    info = _detect_python_tool("textaccounts")
+    assert info.installed is False
+    assert info.importable is False
+
+
+def test_detect_python_tool_in_path_but_not_importable(monkeypatch, tmp_path):
+    """detect_python_tool marks installed=True if binary is on PATH even if not importable."""
+    import importlib.util as _ilu
+    import shutil as _sh
+
+    monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
+    fake_bin = tmp_path / "textaccounts"
+    fake_bin.touch()
+    monkeypatch.setattr(_sh, "which", lambda name: str(fake_bin))
+
+    info = _detect_python_tool("textaccounts")
+    assert info.installed is True
+    assert info.importable is False
+    assert info.source == "path"
+
+
+def test_detect_go_tool_in_bin_dir(tmp_path, monkeypatch):
+    """detect_installed_tools finds a Go binary in the managed BIN_DIR."""
+    import shutil as _sh
+    import textworkspace.doctor as _doc
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_binary = bin_dir / "textproxy"
+    fake_binary.touch()
+
+    # Patch BIN_DIR in bootstrap and doctor, block PATH lookup
+    monkeypatch.setattr("textworkspace.bootstrap.BIN_DIR", bin_dir)
+    monkeypatch.setattr(_sh, "which", lambda name: None)
+    # Prevent config load from touching real fs
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+
+    tools = detect_installed_tools()
+    assert tools["textproxy"].installed is True
+    assert tools["textproxy"].source == "github"
+    assert tools["textproxy"].bin_path == str(fake_binary)
+
+
+def test_detect_go_tool_not_found(tmp_path, monkeypatch):
+    """detect_installed_tools returns installed=False when binary absent."""
+    import shutil as _sh
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    monkeypatch.setattr("textworkspace.bootstrap.BIN_DIR", bin_dir)
+    monkeypatch.setattr(_sh, "which", lambda name: None)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+
+    tools = detect_installed_tools()
+    assert tools["textproxy"].installed is False
+    assert tools["textserve"].installed is False
+
+
+def test_is_port_responding_false():
+    """_is_port_responding returns False for a port nothing listens on."""
+    assert _is_port_responding(19999, timeout=0.1) is False
+
+
+# ---------------------------------------------------------------------------
+# doctor.py — run_doctor_checks
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_tools(*, textaccounts=True, textsessions=True, textproxy=True, textserve=False):
+    tools = {}
+    for name, installed in [
+        ("textaccounts", textaccounts),
+        ("textsessions", textsessions),
+        ("textproxy", textproxy),
+        ("textserve", textserve),
+    ]:
+        tools[name] = ToolInfo(
+            name=name,
+            installed=installed,
+            version="0.1.0" if installed else None,
+            source="pypi" if name in ("textaccounts", "textsessions") else "github",
+        )
+    return tools
+
+
+def test_doctor_checks_all_tools_ok(tmp_path, monkeypatch):
+    """run_doctor_checks marks all tools ok when installed."""
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools())
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: True)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+
+    # Fish function files present
+    for fn in ["tw", "xtw", "ta", "xta"]:
+        (tmp_path / f"{fn}.fish").touch()
+
+    # Config
+    cfg_file = tmp_path / "config.yaml"
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.combos.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+
+    # Registry
+    registry = tmp_path / "registry.yaml"
+    registry.touch()
+    monkeypatch.setattr(
+        Path, "home", staticmethod(lambda: tmp_path),
+    )
+
+    results = run_doctor_checks()
+
+    tool_results = {r.label: r for r in results}
+    assert tool_results["textaccounts"].status == "ok"
+    assert tool_results["textsessions"].status == "ok"
+    assert tool_results["textproxy"].status == "ok"
+
+
+def test_doctor_checks_missing_required_tool(tmp_path, monkeypatch):
+    """run_doctor_checks marks textaccounts as fail when not installed."""
+    import textworkspace.doctor as _doc
+
+    missing_tools = _make_mock_tools(textaccounts=False, textproxy=False, textserve=False)
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: missing_tools)
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: False)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.combos.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+
+    results = run_doctor_checks()
+    tool_results = {r.label: r for r in results}
+
+    assert tool_results["textaccounts"].status == "fail"
+    assert tool_results["textproxy"].status == "warn"  # optional tool
+    assert tool_results["textserve"].status == "warn"  # optional tool
+
+
+def test_doctor_checks_missing_config(tmp_path, monkeypatch):
+    """run_doctor_checks warns when config.yaml is absent."""
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools())
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: False)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "nonexistent.yaml")
+    monkeypatch.setattr("textworkspace.combos.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+
+    results = run_doctor_checks()
+    tool_results = {r.label: r for r in results}
+    assert tool_results["config"].status == "warn"
+    assert "tw init" in (tool_results["config"].fix or "")
+
+
+def test_doctor_checks_fish_partial(tmp_path, monkeypatch):
+    """run_doctor_checks warns when only some fish functions are installed."""
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools())
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: False)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.combos.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+
+    # Only tw.fish present
+    (tmp_path / "tw.fish").touch()
+
+    results = run_doctor_checks()
+    fish_result = next(r for r in results if r.label == "fish")
+    assert fish_result.status == "warn"
+    assert "tw" in fish_result.detail
+
+
+def test_doctor_proxy_responding(tmp_path, monkeypatch):
+    """run_doctor_checks shows proxy ok when port is responding."""
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools())
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: True)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.combos.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+
+    results = run_doctor_checks()
+    proxy = next(r for r in results if r.label == "proxy")
+    assert proxy.status == "ok"
+    assert "responding" in proxy.detail
+
+
+# ---------------------------------------------------------------------------
+# tw init — CLI integration
+# ---------------------------------------------------------------------------
+
+
+def test_init_creates_config_and_combos(tmp_path, monkeypatch):
+    """tw init creates config.yaml and combos.yaml when both are absent."""
+    import textworkspace.doctor as _doc
+
+    cfg_file = tmp_path / "config.yaml"
+    combos_file = tmp_path / "combos.yaml"
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", combos_file)
+    monkeypatch.setattr("textworkspace.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.cli.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.cli.COMBOS_FILE", combos_file)
+
+    # No tools installed, decline all downloads
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools(
+        textaccounts=False, textsessions=False, textproxy=False, textserve=False,
+    ))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init"], input="n\nn\n")
+    assert result.exit_code == 0
+    assert cfg_file.exists()
+    assert combos_file.exists()
+    assert "Done" in result.output
+
+
+def test_init_registers_detected_python_tools(tmp_path, monkeypatch):
+    """tw init writes detected Python tools to config."""
+    import textworkspace.doctor as _doc
+
+    cfg_file = tmp_path / "config.yaml"
+    combos_file = tmp_path / "combos.yaml"
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", combos_file)
+    monkeypatch.setattr("textworkspace.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.cli.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.cli.COMBOS_FILE", combos_file)
+
+    detected = _make_mock_tools(textproxy=False, textserve=False)
+    detected["textaccounts"].version = "0.3.1"
+    detected["textsessions"].version = "0.5.0"
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: detected)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init"], input="n\nn\n")
+    assert result.exit_code == 0
+
+    cfg = load_config()
+    assert "textaccounts" in cfg.tools
+    assert cfg.tools["textaccounts"].version == "0.3.1"
+    assert "textsessions" in cfg.tools
+    assert cfg.tools["textsessions"].version == "0.5.0"
+
+
+def test_init_combos_file_already_exists(tmp_path, monkeypatch):
+    """tw init doesn't overwrite existing combos.yaml."""
+    import textworkspace.doctor as _doc
+
+    cfg_file = tmp_path / "config.yaml"
+    combos_file = tmp_path / "combos.yaml"
+    combos_file.write_text("# existing\n")
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", combos_file)
+    monkeypatch.setattr("textworkspace.cli.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.cli.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("textworkspace.cli.COMBOS_FILE", combos_file)
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools(
+        textaccounts=False, textsessions=False, textproxy=False, textserve=False,
+    ))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["init"], input="n\nn\n")
+    assert result.exit_code == 0
+    assert combos_file.read_text() == "# existing\n"
+    assert "exists" in result.output
+
+
+def test_doctor_cli_output_format(tmp_path, monkeypatch):
+    """tw doctor prints aligned columns with status labels."""
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "run_doctor_checks", lambda: [
+        CheckResult(label="textaccounts", detail="0.3.1 via pypi", status="ok"),
+        CheckResult(label="textproxy", detail="not installed", status="warn", fix="tw update textproxy"),
+    ])
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0
+    assert "textaccounts" in result.output
+    assert "0.3.1 via pypi" in result.output
+    assert "ok" in result.output
+    assert "warn" in result.output
+    assert "tw update textproxy" in result.output

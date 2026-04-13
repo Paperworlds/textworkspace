@@ -360,15 +360,22 @@ class TestCombosListCommand:
 
 class TestInitCreatesComboYaml:
     def test_init_creates_combos_yaml(self, tmp_path, monkeypatch):
+        import textworkspace.doctor as _doc
+        from textworkspace.doctor import ToolInfo
+
         monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
         monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
         monkeypatch.setattr("textworkspace.cli.CONFIG_DIR", tmp_path)
         monkeypatch.setattr("textworkspace.cli.CONFIG_FILE", tmp_path / "config.yaml")
         monkeypatch.setattr("textworkspace.cli.COMBOS_FILE", tmp_path / "combos.yaml")
         monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+        # No tools installed; decline Go binary downloads
+        monkeypatch.setattr(_doc, "detect_installed_tools", lambda: {
+            n: ToolInfo(name=n) for n in ("textaccounts", "textsessions", "textproxy", "textserve")
+        })
 
         runner = CliRunner()
-        result = runner.invoke(main, ["init"])
+        result = runner.invoke(main, ["init"], input="n\nn\n")
         assert result.exit_code == 0
         combos_path = tmp_path / "combos.yaml"
         assert combos_path.exists()
