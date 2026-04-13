@@ -827,15 +827,17 @@ def _status_sessions() -> str:
     if not _HAS_TEXTSESSIONS:
         return "(textsessions not installed)"
     try:
+        from datetime import date
+
         items = load_sessions()
         total = len(items)
-        active = sum(
+        today = date.today().isoformat()  # "2026-04-13"
+        active_today = sum(
             1 for i in items
-            if (i.get("state") if isinstance(i, dict) else getattr(i, "state", None))
-            in ("active", "running")
+            if isinstance(i, dict) and i.get("last_active", "").startswith(today)
         )
-        active_part = f" · {active} active" if active else ""
-        return f"{total} total{active_part}"
+        today_part = f" · {active_today} active today" if active_today else ""
+        return f"{total} total{today_part}"
     except Exception as exc:  # noqa: BLE001
         return f"(error: {exc})"
 
