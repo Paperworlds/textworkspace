@@ -771,16 +771,38 @@ from textworkspace.doctor import (
 def test_detect_python_tool_found(monkeypatch):
     """detect_python_tool returns installed=True when module is importable."""
     import importlib.util as _ilu
+    import shutil as _sh
 
     fake_spec = object()  # truthy non-None
     monkeypatch.setattr(_ilu, "find_spec", lambda name: fake_spec)
     monkeypatch.setattr("importlib.metadata.version", lambda name: "1.2.3")
+    # No binary on PATH — falls back to importlib.metadata for version
+    monkeypatch.setattr(_sh, "which", lambda name: None)
 
     info = _detect_python_tool("textaccounts")
     assert info.installed is True
     assert info.importable is True
     assert info.version == "1.2.3"
     assert info.source == "pypi"
+
+
+def test_detect_python_tool_prefers_binary_version(monkeypatch, tmp_path):
+    """detect_python_tool prefers --version output over importlib.metadata."""
+    import importlib.util as _ilu
+    import shutil as _sh
+
+    fake_spec = object()
+    monkeypatch.setattr(_ilu, "find_spec", lambda name: fake_spec)
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "0.5.4")
+
+    fake_bin = tmp_path / "textsessions"
+    fake_bin.write_text("#!/bin/sh\necho 'textsessions, version 0.6.0'\n")
+    fake_bin.chmod(0o755)
+    monkeypatch.setattr(_sh, "which", lambda name: str(fake_bin))
+
+    info = _detect_python_tool("textsessions")
+    assert info.installed is True
+    assert info.version == "0.6.0"  # binary wins over metadata
 
 
 def test_detect_python_tool_missing(monkeypatch):

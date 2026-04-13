@@ -68,13 +68,6 @@ def _detect_python_tool(name: str) -> ToolInfo:
     except (ImportError, ModuleNotFoundError, ValueError):
         pass
 
-    # Version via importlib.metadata
-    if info.installed:
-        try:
-            info.version = importlib.metadata.version(name)
-        except Exception:  # noqa: BLE001
-            pass
-
     # Binary on PATH
     bin_path = shutil.which(name)
     if bin_path:
@@ -82,6 +75,18 @@ def _detect_python_tool(name: str) -> ToolInfo:
         if not info.installed:
             info.installed = True
             info.source = "path"
+
+    # Prefer binary --version over importlib.metadata (metadata can be stale
+    # when tools are installed as uv tools with independent venvs)
+    if info.bin_path:
+        _try_version_from_binary(info)
+
+    # Fall back to importlib.metadata if binary didn't yield a version
+    if info.installed and not info.version:
+        try:
+            info.version = importlib.metadata.version(name)
+        except Exception:  # noqa: BLE001
+            pass
 
     return info
 
@@ -139,8 +144,13 @@ def _try_version_from_binary(info: ToolInfo) -> None:
         )
         output = res.stdout + res.stderr
         for word in output.split():
-            if word.startswith("v") and len(word) > 1 and word[1].isdigit():
-                info.version = word.lstrip("v")
+            # Match "v0.1.3" or "0.6.0" — strip leading v if present
+            clean = word.rstrip(",")
+            if clean and clean[0].isdigit() and "." in clean:
+                info.version = clean
+                break
+            if clean.startswith("v") and len(clean) > 1 and clean[1].isdigit():
+                info.version = clean.lstrip("v")
                 break
     except Exception:  # noqa: BLE001
         pass
