@@ -53,15 +53,25 @@ except ImportError:
         raise KeyError(profile)
 
 try:
-    from textsessions.sessions import CACHE_PATH as _TS_CACHE_PATH, filter_sessions as _ts_filter
+    from textsessions.sessions import STATE_DIR as _TS_STATE_DIR, filter_sessions as _ts_filter
 
     _HAS_TEXTSESSIONS = True
 
-    def load_sessions() -> list:
-        import json
-        if not _TS_CACHE_PATH.exists():
-            return []
-        return json.loads(_TS_CACHE_PATH.read_text())
+    def load_sessions() -> list[dict]:
+        """Read all sessions from textsessions YAML index files."""
+        import yaml
+
+        sessions: list[dict] = []
+        for f in _TS_STATE_DIR.glob("*.yaml"):
+            if f.name.startswith("_"):
+                continue
+            with f.open() as fh:
+                data = yaml.safe_load(fh) or {}
+            for sid, info in data.items():
+                if isinstance(info, dict):
+                    info["id"] = sid
+                    sessions.append(info)
+        return sessions
 
     def filter_sessions(sessions: list, query: str | None = None) -> list:
         if not query:
