@@ -213,8 +213,6 @@ def test_switch_emits_fish_env_exports(monkeypatch):
         "textworkspace.cli.env_for_profile",
         lambda p: {"CLAUDE_CONFIG_DIR": "/home/user/.claude-work"},
     )
-    monkeypatch.setattr("textworkspace.cli._ta_switch", lambda p: None)
-
     runner = CliRunner()
     result = runner.invoke(main, ["switch", "work"])
     assert result.exit_code == 0
@@ -249,8 +247,8 @@ def test_sessions_warns_when_missing(monkeypatch):
 def test_sessions_lists_via_api(monkeypatch):
     monkeypatch.setattr("textworkspace.cli._HAS_TEXTSESSIONS", True)
     monkeypatch.setattr(
-        "textworkspace.cli._ts_list",
-        lambda query=None, limit=20: [
+        "textworkspace.cli.load_sessions",
+        lambda: [
             {"id": "abc123", "title": "my session", "state": "active"},
             {"id": "def456", "title": "old session", "state": "idle"},
         ],
@@ -266,7 +264,7 @@ def test_sessions_lists_via_api(monkeypatch):
 
 def test_sessions_no_results(monkeypatch):
     monkeypatch.setattr("textworkspace.cli._HAS_TEXTSESSIONS", True)
-    monkeypatch.setattr("textworkspace.cli._ts_list", lambda query=None, limit=20: [])
+    monkeypatch.setattr("textworkspace.cli.load_sessions", lambda: [])
 
     runner = CliRunner()
     result = runner.invoke(main, ["sessions"])
@@ -415,25 +413,18 @@ def test_status_with_mocked_integrations(monkeypatch):
     monkeypatch.setattr("textworkspace.cli._HAS_TEXTSESSIONS", True)
     monkeypatch.setattr("textworkspace.cli.list_profiles", lambda: ["work", "personal"])
     monkeypatch.setattr(
-        "textworkspace.cli._proxy_stats_http",
-        lambda port=9880: {"tokens": 14200},
-    )
-    monkeypatch.setattr(
-        "textworkspace.cli._ts_list",
-        lambda limit=1000: [
+        "textworkspace.cli.load_sessions",
+        lambda: [
             {"id": "1", "title": "a", "state": "active"},
             {"id": "2", "title": "b", "state": "idle"},
         ],
     )
-    import os as _os
     monkeypatch.setenv("TW_PROFILE", "work")
 
     runner = CliRunner()
     result = runner.invoke(main, ["status"])
     assert result.exit_code == 0
     assert "work" in result.output
-    assert "running" in result.output
-    assert "14.2k" in result.output
     assert "2 total" in result.output
 
 

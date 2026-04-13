@@ -40,7 +40,7 @@ from textworkspace.config import CONFIG_DIR, CONFIG_FILE, ToolEntry, config_as_y
 # ---------------------------------------------------------------------------
 
 try:
-    from textaccounts.api import env_for_profile, list_profiles, switch as _ta_switch
+    from textaccounts.api import env_for_profile, list_profiles
 
     _HAS_TEXTACCOUNTS = True
 except ImportError:
@@ -52,17 +52,29 @@ except ImportError:
     def env_for_profile(profile: str) -> dict:  # type: ignore[misc]
         raise KeyError(profile)
 
-    def _ta_switch(profile: str) -> None:  # type: ignore[misc]
-        pass
-
 try:
-    from textsessions.api import list_sessions as _ts_list
+    from textsessions.sessions import CACHE_PATH as _TS_CACHE_PATH, filter_sessions as _ts_filter
 
     _HAS_TEXTSESSIONS = True
+
+    def load_sessions() -> list:
+        import json
+        if not _TS_CACHE_PATH.exists():
+            return []
+        return json.loads(_TS_CACHE_PATH.read_text())
+
+    def filter_sessions(sessions: list, query: str | None = None) -> list:
+        if not query:
+            return sessions
+        return _ts_filter(sessions, query=query)
+
 except ImportError:
     _HAS_TEXTSESSIONS = False
 
-    def _ts_list(**kwargs) -> list:  # type: ignore[misc]
+    def load_sessions() -> list:  # type: ignore[misc]
+        return []
+
+    def filter_sessions(sessions: list, **kwargs) -> list:  # type: ignore[misc]
         return []
 
 
@@ -245,12 +257,12 @@ def _init_textserve(cfg: Any, tools: dict) -> None:
 
 def _init_fish_functions() -> None:
     """Offer to install fish shell wrapper functions."""
-    from textworkspace.shell import generate_all_functions
+    from textworkspace.shell import generate_fish
 
     fish_dir = Path.home() / ".config" / "fish" / "functions"
     fish_tw_file = fish_dir / "tw.fish"
 
-    click.echo("fish shell wrapper  (optional, enables tw and x-aliases)")
+    click.echo("fish shell wrapper  (optional, for tw switch env propagation)")
 
     # Check if fish is available
     try:
@@ -273,8 +285,7 @@ def _init_fish_functions() -> None:
 
     # Offer to install
     if click.confirm("  Install fish functions?", default=True):
-        functions = generate_all_functions()
-        fish_tw_file.write_text(functions + "\n")
+        fish_tw_file.write_text(generate_fish() + "\n")
         click.echo(f"  installed → {fish_tw_file}")
     else:
         click.echo("  skipped")
@@ -438,36 +449,43 @@ def switch(profile: str | None) -> None:
         for export in exports:
             click.echo(export)
 
-    # Notify the underlying library (may update default, etc.)
-    try:
-        _ta_switch(profile)
-    except Exception as exc:  # noqa: BLE001
-        click.echo(f"warning: switch side-effect failed — {exc}", err=True)
 
 
 # ---------------------------------------------------------------------------
-# tw shell [--fish]
+# tw shell [--fish|--bash|--zsh]
 # ---------------------------------------------------------------------------
 
 
 @main.command()
-@click.option("--fish", is_flag=True, help="Output fish function definitions.")
-def shell(fish: bool) -> None:
-    """Generate shell wrapper functions for tw and aliases.
+@click.option("--fish", "shell_type", flag_value="fish", help="Output fish shell wrapper.")
+@click.option("--bash", "shell_type", flag_value="bash", help="Output bash shell wrapper.")
+@click.option("--zsh", "shell_type", flag_value="zsh", help="Output zsh shell wrapper.")
+def shell(shell_type: str | None) -> None:
+    """Generate shell wrapper functions for tw and xtw.
 
-    Output fish function definitions that can be installed into
-    ~/.config/fish/functions/ to enable tw, xtw, and x-aliases with
-    proper environment variable handling.
+    Prints shell functions that handle the __TW_EVAL__ protocol for
+    `tw switch`. Install by appending to your shell config:
+
+      fish: tw shell --fish > ~/.config/fish/functions/tw.fish
+      bash: tw shell --bash >> ~/.bashrc
+      zsh:  tw shell --zsh  >> ~/.zshrc
     """
-    from textworkspace.shell import generate_all_functions
+    from textworkspace.shell import generate_bash, generate_fish, generate_zsh
 
-    if not fish:
-        # Default to fish for now
-        fish = True
+    if shell_type is None:
+        shell_type = _detect_shell()
 
-    if fish:
-        output = generate_all_functions()
-        click.echo(output)
+    generators = {"fish": generate_fish, "bash": generate_bash, "zsh": generate_zsh}
+    click.echo(generators[shell_type]())
+
+
+def _detect_shell() -> str:
+    shell_path = os.environ.get("SHELL", "")
+    if "fish" in shell_path:
+        return "fish"
+    if "zsh" in shell_path:
+        return "zsh"
+    return "bash"
 
 
 # ---------------------------------------------------------------------------
@@ -486,7 +504,8 @@ def sessions(query: str | None, limit: int) -> None:
     """
     if _HAS_TEXTSESSIONS:
         try:
-            items = _ts_list(query=query, limit=limit)
+            all_sessions = load_sessions()
+            items = filter_sessions(all_sessions, query=query)[:limit] if query else all_sessions[:limit]
         except Exception as exc:  # noqa: BLE001
             click.echo(f"sessions: error querying textsessions — {exc}", err=True)
             raise SystemExit(1)
@@ -758,24 +777,18 @@ def _status_profile() -> str:
 
 
 def _status_proxy() -> str:
+    import socket
+
     port = _get_textproxy_port()
     try:
-        data = _proxy_stats_http(port)
-        tokens = data.get("tokens", data.get("total_tokens"))
-        token_part = f" · {_fmt_tokens(tokens)} tokens this session" if tokens is not None else ""
-        return f"running :{port}{token_part}"
-    except Exception:  # noqa: BLE001
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return f"running :{port}"
+    except OSError:
         pass
 
-    try:
-        data = _proxy_stats_subprocess()
-        tokens = data.get("tokens", data.get("total_tokens"))
-        token_part = f" · {_fmt_tokens(tokens)} tokens this session" if tokens is not None else ""
-        return f"running{token_part}"
-    except FileNotFoundError:
+    if not shutil.which("textproxy"):
         return "not installed"
-    except Exception:  # noqa: BLE001
-        return "not running"
+    return "not running"
 
 
 def _status_servers() -> str:
@@ -814,7 +827,7 @@ def _status_sessions() -> str:
     if not _HAS_TEXTSESSIONS:
         return "(textsessions not installed)"
     try:
-        items = _ts_list(limit=1000)
+        items = load_sessions()
         total = len(items)
         active = sum(
             1 for i in items

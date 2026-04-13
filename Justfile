@@ -29,11 +29,11 @@ doctor:
 status:
     uv run textworkspace status
 
-# Generate fish shell functions
-fish:
-    uv run textworkspace shell --fish
+# Generate shell wrapper (auto-detects shell, or: just shell --fish/--bash/--zsh)
+shell *FLAGS:
+    uv run textworkspace shell {{ FLAGS }}
 
-# Install fish functions
+# Install fish wrapper
 fish-install:
     uv run textworkspace shell --fish > ~/.config/fish/functions/tw.fish
     @echo "Installed → ~/.config/fish/functions/tw.fish"
