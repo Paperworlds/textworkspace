@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from typing import Any
 
 import click
 
@@ -16,7 +17,13 @@ from textworkspace.bootstrap import (
     install_binary,
     latest_version,
 )
-from textworkspace.config import CONFIG_FILE, ToolEntry, config_as_yaml, load_config, save_config
+from textworkspace.combos import (
+    COMBOS_FILE,
+    DEFAULT_COMBOS_YAML,
+    load_combos,
+    run_combo,
+)
+from textworkspace.config import CONFIG_DIR, CONFIG_FILE, ToolEntry, config_as_yaml, load_config, save_config
 
 # ---------------------------------------------------------------------------
 # Optional integration imports — degrade gracefully if not installed
@@ -50,14 +57,61 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# CLI root
+# CLI root — ComboGroup dispatches unknown commands to combo definitions
 # ---------------------------------------------------------------------------
 
 
-@click.group()
+class _ComboGroup(click.Group):
+    """click.Group that falls back to user-defined combos for unknown commands."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        cmd = super().get_command(ctx, cmd_name)
+        if cmd is not None:
+            return cmd
+        try:
+            combos = load_combos()
+        except Exception:  # noqa: BLE001
+            return None
+        defn = combos.get(cmd_name)
+        if defn is None:
+            return None
+        return _make_combo_command(cmd_name, defn)
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        base = super().list_commands(ctx)
+        try:
+            combo_names = list(load_combos().keys())
+        except Exception:  # noqa: BLE001
+            combo_names = []
+        return sorted(set(base) | set(combo_names))
+
+
+def _make_combo_command(name: str, defn: dict[str, Any]) -> click.Command:
+    """Build a click.Command that runs a combo."""
+
+    @click.command(name=name, help=defn.get("description", f"Run the '{name}' combo."))
+    @click.argument("args", nargs=-1)
+    @click.option("--continue", "continue_on_error", is_flag=True, help="Continue on step failure.")
+    @click.pass_context
+    def _cmd(ctx: click.Context, args: tuple[str, ...], continue_on_error: bool) -> None:
+        dry_run = (ctx.obj or {}).get("dry_run", False)
+        arg_names: list[str] = defn.get("args", [])
+        args_map = {arg_names[i]: args[i] for i in range(min(len(arg_names), len(args)))}
+        rc = run_combo(name, defn, args_map, dry_run=dry_run, continue_on_error=continue_on_error)
+        if rc != 0:
+            raise SystemExit(rc)
+
+    return _cmd
+
+
+@click.group(cls=_ComboGroup)
 @click.version_option(__version__, "--version", "-V", prog_name="textworkspace")
-def main() -> None:
+@click.option("--dry-run", is_flag=True, default=False, help="Print planned steps without executing.")
+@click.pass_context
+def main(ctx: click.Context, dry_run: bool) -> None:
     """textworkspace — manage the Paperworlds text- stack."""
+    ctx.ensure_object(dict)
+    ctx.obj["dry_run"] = dry_run
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +122,23 @@ def main() -> None:
 @main.command()
 def init() -> None:
     """Initialise textworkspace config and install dependencies."""
-    click.echo("init: not yet implemented")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Write default config if absent
+    if not CONFIG_FILE.exists():
+        load_config()
+        click.echo(f"  created {CONFIG_FILE}")
+    else:
+        click.echo(f"  config  {CONFIG_FILE} (exists)")
+
+    # Write default combos.yaml if absent
+    if not COMBOS_FILE.exists():
+        COMBOS_FILE.write_text(DEFAULT_COMBOS_YAML)
+        click.echo(f"  created {COMBOS_FILE}")
+    else:
+        click.echo(f"  combos  {COMBOS_FILE} (exists)")
+
+    click.echo("init: done")
 
 
 @main.command()
@@ -542,6 +612,97 @@ def _status_sessions() -> str:
         return f"{total} total{active_part}"
     except Exception as exc:  # noqa: BLE001
         return f"(error: {exc})"
+
+
+# ---------------------------------------------------------------------------
+# tw combos group
+# ---------------------------------------------------------------------------
+
+
+@main.group("combos", invoke_without_command=True)
+@click.pass_context
+def combos_cmd(ctx: click.Context) -> None:
+    """Manage combo workflow recipes."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@combos_cmd.command("list")
+def combos_list() -> None:
+    """List all available combos with descriptions."""
+    try:
+        combos = load_combos()
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"combos list: error loading combos — {exc}", err=True)
+        raise SystemExit(1)
+
+    if not combos:
+        click.echo("No combos defined. Run `tw init` to create the default combos.yaml.")
+        return
+
+    label_width = max(len(k) for k in combos)
+    for name, defn in sorted(combos.items()):
+        desc = defn.get("description", "")
+        builtin_tag = "  [builtin]" if defn.get("builtin") else ""
+        click.echo(f"  {name:<{label_width}}  {desc}{builtin_tag}")
+
+
+@combos_cmd.command("edit")
+def combos_edit() -> None:
+    """Open combos.yaml in $EDITOR."""
+    if not COMBOS_FILE.exists():
+        click.echo(f"combos.yaml not found — run `tw init` first", err=True)
+        raise SystemExit(1)
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(COMBOS_FILE)], check=False)
+
+
+@combos_cmd.command("add")
+@click.argument("name")
+def combos_add(name: str) -> None:
+    """Scaffold a new combo entry interactively."""
+    try:
+        combos = load_combos()
+    except Exception:  # noqa: BLE001
+        combos = {}
+
+    if name in combos:
+        click.echo(f"warning: combo '{name}' already exists — it will be overwritten if you save")
+
+    description = click.prompt("Description", default=f"Run the {name} combo")
+    args_raw = click.prompt("Positional args (comma-separated, or blank)", default="")
+    args_list = [a.strip() for a in args_raw.split(",") if a.strip()]
+    step_count = click.prompt("How many steps?", default=1, type=int)
+    steps = []
+    for i in range(step_count):
+        run_str = click.prompt(f"  step {i + 1} run")
+        skip_if = click.prompt(f"  step {i + 1} skip_if (or blank)", default="")
+        only_if = click.prompt(f"  step {i + 1} only_if (or blank)", default="")
+        step: dict[str, str] = {"run": run_str}
+        if skip_if:
+            step["skip_if"] = skip_if
+        if only_if:
+            step["only_if"] = only_if
+        steps.append(step)
+
+    entry: dict[str, Any] = {"description": description, "steps": steps}
+    if args_list:
+        entry["args"] = args_list
+
+    import yaml as _yaml  # noqa: PLC0415
+
+    snippet = _yaml.dump({name: entry}, default_flow_style=False, indent=2)
+    click.echo("\nAdd this to your combos.yaml under 'combos:':\n")
+    click.echo(snippet)
+    if COMBOS_FILE.exists() and click.confirm("Append to combos.yaml now?", default=True):
+        with COMBOS_FILE.open() as f:
+            existing = _yaml.safe_load(f) or {}
+        if "combos" not in existing or not isinstance(existing["combos"], dict):
+            existing["combos"] = {}
+        existing["combos"][name] = entry
+        with COMBOS_FILE.open("w") as f:
+            _yaml.dump(existing, f, default_flow_style=False)
+        click.echo(f"  saved '{name}' to {COMBOS_FILE}")
 
 
 # ---------------------------------------------------------------------------
