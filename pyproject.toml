@@ -22,6 +22,8 @@ Issues = "https://github.com/paperworlds/textworkspace/issues"
 
 [project.scripts]
 textworkspace = "textworkspace.cli:main"
+tw = "textworkspace.cli:main"
+xtw = "textworkspace.cli:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true
