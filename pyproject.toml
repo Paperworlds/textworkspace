@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "textworkspace"
+version = "0.1.0"
+description = "Meta CLI and package manager for the Paperworlds text- stack"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+accounts = [
+    "textaccounts @ git+https://github.com/paperworlds/textaccounts.git",
+]
+sessions = [
+    "textsessions @ git+https://github.com/paperworlds/textsessions.git",
+]
+
+[project.urls]
+Homepage = "https://github.com/paperworlds/textworkspace"
+Repository = "https://github.com/paperworlds/textworkspace"
+Issues = "https://github.com/paperworlds/textworkspace/issues"
+
+[project.scripts]
+textworkspace = "textworkspace.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/textworkspace"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
