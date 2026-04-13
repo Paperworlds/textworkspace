@@ -273,8 +273,7 @@ def _init_fish_functions() -> None:
 
     # Offer to install
     if click.confirm("  Install fish functions?", default=True):
-        tool_aliases = ["ta", "ts", "tp", "sv", "pr", "tm"]
-        functions = generate_all_functions(tool_aliases)
+        functions = generate_all_functions()
         fish_tw_file.write_text(functions + "\n")
         click.echo(f"  installed → {fish_tw_file}")
     else:
@@ -467,9 +466,7 @@ def shell(fish: bool) -> None:
         fish = True
 
     if fish:
-        # Generate x-aliases for known tools: ta, ts, tp, sv, pr, tm
-        tool_aliases = ["ta", "ts", "tp", "sv", "pr", "tm"]
-        output = generate_all_functions(tool_aliases)
+        output = generate_all_functions()
         click.echo(output)
 
 
