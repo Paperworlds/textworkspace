@@ -1,0 +1,92 @@
+# textworkspace — Ideas Backlog
+# Ordered by priority within each category
+
+observability:
+  - name: textctx
+    title: Context window curator
+    priority: 1
+    status: idea
+    description: >
+      What goes into Claude's context per session, per repo, per task.
+      Curated .context files, smart truncation, relevance scoring.
+      Context management is completely unsolved right now.
+    references:
+      - title: Caveman — token reduction via terse prompting
+        url: https://github.com/JuliusBrussee/caveman
+        note: 65-75% output token savings. Our pp already has terse mode — validates going further.
+      - title: recursive-mode — file-based phase management
+        url: https://recursive-mode.dev/introduction
+        note: Externalized state (STATE.md, DECISIONS.md) is a form of context curation across sessions.
+
+  - name: textaudit
+    title: Immutable audit trail
+    priority: 2
+    status: idea
+    description: >
+      All Claude Code actions across all sessions. What was asked, what was
+      changed, which files were touched, cost per action. Compliance-adjacent,
+      pairs naturally with textproxy.
+
+developer_workflow:
+  - name: texthook
+    title: Git hooks integration
+    priority: 3
+    status: idea
+    description: >
+      Pre-commit AI review, auto-summarize diffs for commit messages, flag
+      risky changes before they land. Lives at the intersection of Claude Code
+      and the normal dev workflow.
+    references:
+      - title: Datadog Code Security MCP
+        url: https://www.datadoghq.com/blog/introducing-datadog-code-security-mcp/
+        note: MCP server for SAST/SCA/secrets/IaC. Could pair with texthook for pre-commit security scanning.
+
+  - name: textwatch
+    title: Reactive filesystem trigger
+    priority: 4
+    status: idea
+    description: >
+      Filesystem watcher that triggers agentic workflows on file events.
+      Save a spec file → textprompts DAG runs automatically. The reactive layer.
+
+quality:
+  - name: textbench
+    title: Prompt regression testing
+    priority: 5
+    status: idea
+    description: >
+      Run the same prompt across model versions and compare outputs.
+      Regression testing for prompts. Critical once textprompts is shipping
+      real DAG workflows.
+
+# Validation from the field — confirms existing tools are on the right track
+
+validation:
+  textprompts:
+    - title: "Anthropic: Multi-agent coordination patterns"
+      url: https://claude.com/blog/multi-agent-coordination-patterns
+      takeaway: >
+        Five patterns. Recommendation: start with orchestrator-subagent —
+        exactly what textprompts/pp does. Evolution path toward shared state
+        via textmap.
+    - title: "Factory.ai: Missions architecture"
+      url: https://factory.ai/news/missions-architecture
+      takeaway: >
+        Almost identical to pp. Orchestrator → workers → validators.
+        38.8k LOC across 6 milestones in 16.5h. Key addition we lack:
+        validators as a distinct agent role.
+
+  textserve:
+    - title: Datadog Code Security MCP
+      url: https://www.datadoghq.com/blog/introducing-datadog-code-security-mcp/
+      takeaway: MCP server as developer tool. Candidate for textserve fleet registry.
+    - title: Kubernetes 2026 trends
+      url: https://www.loginline.com/en/blog/2026-kubernetes-trends
+      takeaway: If MCP servers move toward k8s, textserve may need to evolve beyond Docker.
+
+  general:
+    - title: OpenHarness / ohmo
+      url: https://github.com/HKUDS/OpenHarness
+      takeaway: >
+        Open-source agent harness. Different level — they rebuild the agent loop,
+        we wrap Claude Code's. Worth watching for combo execution patterns.
