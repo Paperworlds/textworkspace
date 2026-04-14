@@ -1267,7 +1267,7 @@ def test_detect_shell_prefers_fish_version(monkeypatch):
 
 
 def test_shell_install_fish(tmp_path, monkeypatch):
-    """tw shell install --fish writes to the fish functions directory."""
+    """tw shell install --fish writes tw wrapper and installs all tools."""
     fish_dir = tmp_path / ".config" / "fish" / "functions"
 
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
@@ -1275,7 +1275,7 @@ def test_shell_install_fish(tmp_path, monkeypatch):
     runner = CliRunner()
     result = runner.invoke(main, ["shell", "install", "--fish"])
     assert result.exit_code == 0
-    assert "Installed fish wrapper" in result.output
+    assert "tw: wrapper + completions" in result.output
 
     tw_fish = fish_dir / "tw.fish"
     assert tw_fish.exists()
@@ -1284,8 +1284,8 @@ def test_shell_install_fish(tmp_path, monkeypatch):
     assert "_textworkspace_completion" in content
 
 
-def test_shell_install_all_fish(tmp_path, monkeypatch):
-    """tw shell install --fish --all writes completions for installed tools."""
+def test_shell_install_fish_wrappers_and_aliases(tmp_path, monkeypatch):
+    """tw shell install --fish writes wrappers, aliases, and completions for all tools."""
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
     # Pretend textforums and textaccounts are installed, textsessions is not
@@ -1317,49 +1317,44 @@ def test_shell_install_all_fish(tmp_path, monkeypatch):
     monkeypatch.setattr("subprocess.run", fake_run)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["shell", "install", "--fish", "--all"])
+    result = runner.invoke(main, ["shell", "install", "--fish"])
     assert result.exit_code == 0
-
-    # tw wrapper installed (existing behavior)
-    assert "Installed fish wrapper" in result.output
 
     # Tool completions installed
     comp_dir = tmp_path / ".config" / "fish" / "completions"
     assert (comp_dir / "textforums.fish").exists()
     assert (comp_dir / "textaccounts.fish").exists()
-    assert (comp_dir / "ta.fish").exists()  # alias
-    assert "ta.fish" in (comp_dir / "ta.fish").read_text() or "wraps" in (comp_dir / "ta.fish").read_text()
+
+    # Alias function installed
+    func_dir = tmp_path / ".config" / "fish" / "functions"
+    ta_fish = func_dir / "ta.fish"
+    assert ta_fish.exists()
+    assert "textaccounts" in ta_fish.read_text()
+
+    # textaccounts has eval wrapper for switch
+    ta_wrapper = func_dir / "textaccounts.fish"
+    assert ta_wrapper.exists()
+    assert "switch" in ta_wrapper.read_text()
+    assert "eval" in ta_wrapper.read_text()
 
     # Missing tools skipped
     assert "textsessions: not installed" in result.output
     assert "paperagents: not installed" in result.output
 
 
-def test_shell_install_all_skips_missing(tmp_path, monkeypatch):
-    """tw shell install --all skips all tools when none are on PATH."""
+def test_shell_install_skips_missing_tools(tmp_path, monkeypatch):
+    """tw shell install skips tools not on PATH."""
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     monkeypatch.setattr("shutil.which", lambda name: None)
-
-    runner = CliRunner()
-    result = runner.invoke(main, ["shell", "install", "--fish", "--all"])
-    assert result.exit_code == 0
-
-    # No completion files should exist (only the tw wrapper)
-    comp_dir = tmp_path / ".config" / "fish" / "completions"
-    assert not comp_dir.exists() or not list(comp_dir.iterdir())
-
-
-def test_shell_install_without_all_unchanged(tmp_path, monkeypatch):
-    """tw shell install without --all does not write extra completion files."""
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
     runner = CliRunner()
     result = runner.invoke(main, ["shell", "install", "--fish"])
     assert result.exit_code == 0
 
-    # Only tw wrapper, no completions dir
-    comp_dir = tmp_path / ".config" / "fish" / "completions"
-    assert not comp_dir.exists() or not list(comp_dir.iterdir())
+    # tw wrapper always installed
+    assert "tw: wrapper + completions" in result.output
+    # All tools skipped
+    assert "not installed, skipping" in result.output
 
 
 def test_dev_on_requires_dev_root(tmp_path, monkeypatch):

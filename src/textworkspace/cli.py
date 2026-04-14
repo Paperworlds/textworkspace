@@ -449,14 +449,15 @@ _TOOL_ALIASES: dict[str, list[str]] = {
     "paperagents": ["pp"],
 }
 
-# Tools eligible for `tw shell install --all` completion generation.
-# Each entry: (binary_name, click_env_prefix, aliases)
-# textworkspace/tw/xtw excluded — handled by existing shell wrapper install.
-_COMPLETABLE_TOOLS: list[tuple[str, str, list[str]]] = [
-    ("textforums", "TEXTFORUMS", []),
-    ("textaccounts", "TEXTACCOUNTS", ["ta"]),
-    ("textsessions", "TEXTSESSIONS", ["ts"]),
-    ("paperagents", "PAPERAGENTS", ["pp"]),
+# Tools eligible for `tw shell install`.
+# Each entry: (binary_name, click_env_prefix, aliases, eval_subcommands)
+# eval_subcommands: subcommands that need shell eval (like textaccounts switch).
+# textworkspace/tw/xtw excluded — handled by the main shell wrapper.
+_INSTALLABLE_TOOLS: list[tuple[str, str, list[str], list[str]]] = [
+    ("textforums", "TEXTFORUMS", [], []),
+    ("textaccounts", "TEXTACCOUNTS", ["ta"], ["switch"]),
+    ("textsessions", "TEXTSESSIONS", ["ts"], []),
+    ("paperagents", "PAPERAGENTS", ["pp"], []),
 ]
 
 
@@ -732,47 +733,43 @@ def shell(ctx: click.Context, shell_type: str | None) -> None:
 @click.option("--fish", "shell_type", flag_value="fish", help="Install for fish.")
 @click.option("--bash", "shell_type", flag_value="bash", help="Install for bash.")
 @click.option("--zsh", "shell_type", flag_value="zsh", help="Install for zsh.")
-@click.option("--all", "install_all", is_flag=True, default=False,
-              help="Also install completions for other Paperworlds CLI tools.")
-def install(shell_type: str | None, install_all: bool) -> None:
-    """Install shell wrappers and completions.
+def install(shell_type: str | None) -> None:
+    """Install shell wrappers, aliases, and completions for the entire stack.
 
-    Detects your shell and writes the appropriate config:
+    Detects your shell and writes:
 
-      fish: ~/.config/fish/functions/tw.fish
-      bash: appends to ~/.bashrc
-      zsh:  appends to ~/.zshrc
-
-    With --all, also generates completions for textforums, textaccounts,
-    textsessions, and paperagents (if installed).
+    \b
+      1. tw wrapper (eval support for tw switch)
+      2. Wrappers for tools that need eval (e.g. textaccounts switch)
+      3. Alias functions (ta -> textaccounts, ts -> textsessions, pp -> paperagents)
+      4. Tab completions for all installed tools
     """
     from textworkspace.shell import generate_bash, generate_fish, generate_zsh
 
     if shell_type is None:
         shell_type = _detect_shell()
 
+    # 1. Install tw wrapper
     if shell_type == "fish":
         target = Path.home() / ".config" / "fish" / "functions" / "tw.fish"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(generate_fish())
-        click.echo(f"Installed fish wrapper + completions -> {target}")
-        click.echo("Run `source ~/.config/fish/functions/tw.fish` or open a new terminal.")
+        click.echo(f"  tw: wrapper + completions -> {target}")
     elif shell_type == "bash":
         target = Path.home() / ".bashrc"
         marker = "# textworkspace shell wrapper"
         _install_posix_wrapper(target, marker, generate_bash())
-        click.echo(f"Installed bash wrapper + completions -> {target}")
-        click.echo("Run `source ~/.bashrc` or open a new terminal.")
+        click.echo(f"  tw: wrapper + completions -> {target}")
     elif shell_type == "zsh":
         target = Path.home() / ".zshrc"
         marker = "# textworkspace shell wrapper"
         _install_posix_wrapper(target, marker, generate_zsh())
-        click.echo(f"Installed zsh wrapper + completions -> {target}")
-        click.echo("Run `source ~/.zshrc` or open a new terminal.")
+        click.echo(f"  tw: wrapper + completions -> {target}")
 
-    if install_all:
-        click.echo("\nInstalling completions for other tools:")
-        _install_all_tool_completions(shell_type)
+    # 2-4. Install wrappers, aliases, and completions for all tools
+    _install_all_tools(shell_type)
+
+    click.echo("\nDone. Open a new terminal or source your shell config.")
 
 
 def _generate_tool_completion(tool: str, env_prefix: str, shell_type: str) -> str | None:
@@ -792,21 +789,101 @@ def _generate_tool_completion(tool: str, env_prefix: str, shell_type: str) -> st
     return None
 
 
-def _install_all_tool_completions(shell_type: str) -> None:
-    """Generate and install completions for all known Paperworlds CLI tools."""
-    for tool, env_prefix, aliases in _COMPLETABLE_TOOLS:
+def _install_all_tools(shell_type: str) -> None:
+    """Install wrappers, aliases, and completions for all Paperworlds tools."""
+    for tool, env_prefix, aliases, eval_cmds in _INSTALLABLE_TOOLS:
         if not shutil.which(tool):
             click.echo(f"  {tool}: not installed, skipping")
             continue
 
-        completion = _generate_tool_completion(tool, env_prefix, shell_type)
-        if completion is None:
-            click.echo(f"  {tool}: failed to generate completions, skipping")
-            continue
+        parts = []
 
-        _write_tool_completion(tool, aliases, completion, shell_type)
-        names = [tool] + aliases
-        click.echo(f"  {', '.join(names)}: installed")
+        # Wrappers + aliases (fish functions / bash/zsh aliases)
+        if shell_type == "fish":
+            _install_fish_tool(tool, aliases, eval_cmds)
+        else:
+            _install_posix_tool_aliases(tool, aliases, eval_cmds, shell_type)
+        if aliases:
+            parts.append(f"aliases ({', '.join(aliases)})")
+        if eval_cmds:
+            parts.append(f"eval wrapper ({', '.join(eval_cmds)})")
+
+        # Completions
+        completion = _generate_tool_completion(tool, env_prefix, shell_type)
+        if completion:
+            _write_tool_completion(tool, aliases, completion, shell_type)
+            parts.append("completions")
+
+        names = ", ".join([tool] + aliases)
+        detail = " + ".join(parts) if parts else "installed"
+        click.echo(f"  {names}: {detail}")
+
+
+def _install_fish_tool(tool: str, aliases: list[str], eval_cmds: list[str]) -> None:
+    """Write fish function files for a tool: eval wrapper + alias functions."""
+    func_dir = Path.home() / ".config" / "fish" / "functions"
+    func_dir.mkdir(parents=True, exist_ok=True)
+
+    # Main tool wrapper (with eval support for specific subcommands)
+    if eval_cmds:
+        conditions = " ".join(
+            f'test "$argv[1]" = "{cmd}"; or' for cmd in eval_cmds
+        ).rstrip(" or")
+        # Simpler: just check first arg against each eval subcommand
+        checks = "\n".join(
+            f'        test "$argv[1]" = "{cmd}"'
+            for cmd in eval_cmds
+        )
+        if len(eval_cmds) == 1:
+            condition = f'test (count $argv) -ge 1; and test "$argv[1]" = "{eval_cmds[0]}"'
+        else:
+            condition = f'test (count $argv) -ge 1; and begin\n{checks}\n    end'
+        wrapper = (
+            f"# {tool} — shell wrapper (installed by tw shell install)\n"
+            f"function {tool} --description '{tool} with eval support'\n"
+            f"    if {condition}\n"
+            f"        eval (command {tool} $argv)\n"
+            f"    else\n"
+            f"        command {tool} $argv\n"
+            f"    end\n"
+            f"end\n"
+        )
+        (func_dir / f"{tool}.fish").write_text(wrapper)
+
+    # Alias functions
+    for alias in aliases:
+        alias_func = (
+            f"# {alias} -> {tool} (installed by tw shell install)\n"
+            f"function {alias} --description '{tool} alias' --wraps {tool}\n"
+            f"    {tool} $argv\n"
+            f"end\n"
+        )
+        (func_dir / f"{alias}.fish").write_text(alias_func)
+
+
+def _install_posix_tool_aliases(
+    tool: str, aliases: list[str], eval_cmds: list[str], shell_type: str,
+) -> None:
+    """Write bash/zsh aliases and eval wrappers for a tool."""
+    rc_file = Path.home() / (".bashrc" if shell_type == "bash" else ".zshrc")
+    marker = f"# {tool} shell integration"
+    lines = []
+
+    if eval_cmds:
+        # Wrap specific subcommands with eval
+        checks = " | ".join(f'"{cmd}"' for cmd in eval_cmds)
+        lines.append(f'{tool}() {{')
+        lines.append(f'    case "$1" in')
+        lines.append(f'        {"|".join(eval_cmds)}) eval "$(command {tool} "$@")" ;;')
+        lines.append(f'        *) command {tool} "$@" ;;')
+        lines.append(f'    esac')
+        lines.append(f'}}')
+
+    for alias in aliases:
+        lines.append(f'alias {alias}="{tool}"')
+
+    if lines:
+        _install_posix_wrapper(rc_file, marker, "\n".join(lines) + "\n")
 
 
 def _write_tool_completion(
@@ -851,7 +928,7 @@ def _write_tool_completion(
 
 def _install_posix_wrapper(rc_file: Path, marker: str, content: str) -> None:
     """Install or replace a wrapper block in a shell rc file."""
-    end_marker = "# end textworkspace shell wrapper"
+    end_marker = marker.replace("# ", "# end ")
     block = f"{marker}\n{content}{end_marker}\n"
 
     if rc_file.exists():
