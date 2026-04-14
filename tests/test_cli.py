@@ -30,7 +30,7 @@ def test_version():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.2.2" in result.output
+    assert "0.2.3" in result.output
 
 
 def test_help():
@@ -1331,11 +1331,12 @@ def test_shell_install_fish_wrappers_and_aliases(tmp_path, monkeypatch):
     assert ta_fish.exists()
     assert "textaccounts" in ta_fish.read_text()
 
-    # textaccounts has eval wrapper for switch
+    # textaccounts has eval wrapper translating switch → show
     ta_wrapper = func_dir / "textaccounts.fish"
     assert ta_wrapper.exists()
-    assert "switch" in ta_wrapper.read_text()
-    assert "eval" in ta_wrapper.read_text()
+    wrapper_text = ta_wrapper.read_text()
+    assert '"switch"' in wrapper_text
+    assert "eval (command textaccounts show $argv[2..-1])" in wrapper_text
 
     # Missing tools skipped
     assert "textsessions: not installed" in result.output

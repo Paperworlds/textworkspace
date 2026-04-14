@@ -450,14 +450,16 @@ _TOOL_ALIASES: dict[str, list[str]] = {
 }
 
 # Tools eligible for `tw shell install`.
-# Each entry: (binary_name, click_env_prefix, aliases, eval_subcommands)
-# eval_subcommands: subcommands that need shell eval (like textaccounts switch).
+# Each entry: (binary_name, click_env_prefix, aliases, eval_translations)
+# eval_translations: dict mapping virtual subcommand → real subcommand for shell
+# eval wrappers.  e.g. {"switch": "show"} means the user types
+# `textaccounts switch foo` but the binary receives `textaccounts show foo`.
 # textworkspace/tw/xtw excluded — handled by the main shell wrapper.
-_INSTALLABLE_TOOLS: list[tuple[str, str, list[str], list[str]]] = [
-    ("textforums", "TEXTFORUMS", [], []),
-    ("textaccounts", "TEXTACCOUNTS", ["ta"], ["switch"]),
-    ("textsessions", "TEXTSESSIONS", ["ts"], []),
-    ("paperagents", "PAPERAGENTS", ["pp"], []),
+_INSTALLABLE_TOOLS: list[tuple[str, str, list[str], dict[str, str]]] = [
+    ("textforums", "TEXTFORUMS", [], {}),
+    ("textaccounts", "TEXTACCOUNTS", ["ta"], {"switch": "show"}),
+    ("textsessions", "TEXTSESSIONS", ["ts"], {}),
+    ("paperagents", "PAPERAGENTS", ["pp"], {}),
 ]
 
 
@@ -791,7 +793,7 @@ def _generate_tool_completion(tool: str, env_prefix: str, shell_type: str) -> st
 
 def _install_all_tools(shell_type: str) -> None:
     """Install wrappers, aliases, and completions for all Paperworlds tools."""
-    for tool, env_prefix, aliases, eval_cmds in _INSTALLABLE_TOOLS:
+    for tool, env_prefix, aliases, eval_translations in _INSTALLABLE_TOOLS:
         if not shutil.which(tool):
             click.echo(f"  {tool}: not installed, skipping")
             continue
@@ -800,13 +802,13 @@ def _install_all_tools(shell_type: str) -> None:
 
         # Wrappers + aliases (fish functions / bash/zsh aliases)
         if shell_type == "fish":
-            _install_fish_tool(tool, aliases, eval_cmds)
+            _install_fish_tool(tool, aliases, eval_translations)
         else:
-            _install_posix_tool_aliases(tool, aliases, eval_cmds, shell_type)
+            _install_posix_tool_aliases(tool, aliases, eval_translations, shell_type)
         if aliases:
             parts.append(f"aliases ({', '.join(aliases)})")
-        if eval_cmds:
-            parts.append(f"eval wrapper ({', '.join(eval_cmds)})")
+        if eval_translations:
+            parts.append(f"eval wrapper ({', '.join(eval_translations)})")
 
         # Completions
         completion = _generate_tool_completion(tool, env_prefix, shell_type)
@@ -819,30 +821,26 @@ def _install_all_tools(shell_type: str) -> None:
         click.echo(f"  {names}: {detail}")
 
 
-def _install_fish_tool(tool: str, aliases: list[str], eval_cmds: list[str]) -> None:
+def _install_fish_tool(tool: str, aliases: list[str], eval_translations: dict[str, str]) -> None:
     """Write fish function files for a tool: eval wrapper + alias functions."""
     func_dir = Path.home() / ".config" / "fish" / "functions"
     func_dir.mkdir(parents=True, exist_ok=True)
 
     # Main tool wrapper (with eval support for specific subcommands)
-    if eval_cmds:
-        conditions = " ".join(
-            f'test "$argv[1]" = "{cmd}"; or' for cmd in eval_cmds
-        ).rstrip(" or")
-        # Simpler: just check first arg against each eval subcommand
-        checks = "\n".join(
-            f'        test "$argv[1]" = "{cmd}"'
-            for cmd in eval_cmds
-        )
-        if len(eval_cmds) == 1:
-            condition = f'test (count $argv) -ge 1; and test "$argv[1]" = "{eval_cmds[0]}"'
-        else:
-            condition = f'test (count $argv) -ge 1; and begin\n{checks}\n    end'
+    if eval_translations:
+        # Build if/else-if chain for each virtual → real subcommand translation
+        branches = []
+        for i, (virtual, real) in enumerate(eval_translations.items()):
+            keyword = "if" if i == 0 else "    else if"
+            branches.append(
+                f"    {keyword} test (count $argv) -ge 1; and test \"$argv[1]\" = \"{virtual}\"\n"
+                f"        eval (command {tool} {real} $argv[2..-1])"
+            )
+        branches_str = "\n".join(branches)
         wrapper = (
             f"# {tool} — shell wrapper (installed by tw shell install)\n"
             f"function {tool} --description '{tool} with eval support'\n"
-            f"    if {condition}\n"
-            f"        eval (command {tool} $argv)\n"
+            f"{branches_str}\n"
             f"    else\n"
             f"        command {tool} $argv\n"
             f"    end\n"
@@ -862,19 +860,19 @@ def _install_fish_tool(tool: str, aliases: list[str], eval_cmds: list[str]) -> N
 
 
 def _install_posix_tool_aliases(
-    tool: str, aliases: list[str], eval_cmds: list[str], shell_type: str,
+    tool: str, aliases: list[str], eval_translations: dict[str, str], shell_type: str,
 ) -> None:
     """Write bash/zsh aliases and eval wrappers for a tool."""
     rc_file = Path.home() / (".bashrc" if shell_type == "bash" else ".zshrc")
     marker = f"# {tool} shell integration"
     lines = []
 
-    if eval_cmds:
-        # Wrap specific subcommands with eval
-        checks = " | ".join(f'"{cmd}"' for cmd in eval_cmds)
+    if eval_translations:
+        # Wrap specific subcommands with eval, translating virtual → real
         lines.append(f'{tool}() {{')
         lines.append(f'    case "$1" in')
-        lines.append(f'        {"|".join(eval_cmds)}) eval "$(command {tool} "$@")" ;;')
+        for virtual, real in eval_translations.items():
+            lines.append(f'        {virtual}) shift; eval "$(command {tool} {real} "$@")" ;;')
         lines.append(f'        *) command {tool} "$@" ;;')
         lines.append(f'    esac')
         lines.append(f'}}')
