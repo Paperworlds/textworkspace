@@ -449,6 +449,16 @@ _TOOL_ALIASES: dict[str, list[str]] = {
     "paperagents": ["pp"],
 }
 
+# Tools eligible for `tw shell install --all` completion generation.
+# Each entry: (binary_name, click_env_prefix, aliases)
+# textworkspace/tw/xtw excluded — handled by existing shell wrapper install.
+_COMPLETABLE_TOOLS: list[tuple[str, str, list[str]]] = [
+    ("textforums", "TEXTFORUMS", []),
+    ("textaccounts", "TEXTACCOUNTS", ["ta"]),
+    ("textsessions", "TEXTSESSIONS", ["ts"]),
+    ("paperagents", "PAPERAGENTS", ["pp"]),
+]
+
 
 @main.command()
 def aliases() -> None:
@@ -476,10 +486,11 @@ def aliases() -> None:
 # Python tools that can be installed from local repos.
 # Order matters: dependencies must come first.
 # deps maps tool -> list of other _PYTHON_TOOLS it needs injected via --with-editable.
-_PYTHON_TOOLS = ("textaccounts", "textsessions")
+_PYTHON_TOOLS = ("textaccounts", "textsessions", "textworkspace")
 _PYTHON_TOOL_DEPS: dict[str, list[str]] = {
     "textaccounts": [],
     "textsessions": ["textaccounts"],
+    "textworkspace": [],
 }
 
 
@@ -721,7 +732,9 @@ def shell(ctx: click.Context, shell_type: str | None) -> None:
 @click.option("--fish", "shell_type", flag_value="fish", help="Install for fish.")
 @click.option("--bash", "shell_type", flag_value="bash", help="Install for bash.")
 @click.option("--zsh", "shell_type", flag_value="zsh", help="Install for zsh.")
-def install(shell_type: str | None) -> None:
+@click.option("--all", "install_all", is_flag=True, default=False,
+              help="Also install completions for other Paperworlds CLI tools.")
+def install(shell_type: str | None, install_all: bool) -> None:
     """Install shell wrappers and completions.
 
     Detects your shell and writes the appropriate config:
@@ -729,6 +742,9 @@ def install(shell_type: str | None) -> None:
       fish: ~/.config/fish/functions/tw.fish
       bash: appends to ~/.bashrc
       zsh:  appends to ~/.zshrc
+
+    With --all, also generates completions for textforums, textaccounts,
+    textsessions, and paperagents (if installed).
     """
     from textworkspace.shell import generate_bash, generate_fish, generate_zsh
 
@@ -753,6 +769,84 @@ def install(shell_type: str | None) -> None:
         _install_posix_wrapper(target, marker, generate_zsh())
         click.echo(f"Installed zsh wrapper + completions -> {target}")
         click.echo("Run `source ~/.zshrc` or open a new terminal.")
+
+    if install_all:
+        click.echo("\nInstalling completions for other tools:")
+        _install_all_tool_completions(shell_type)
+
+
+def _generate_tool_completion(tool: str, env_prefix: str, shell_type: str) -> str | None:
+    """Run Click's completion protocol to generate shell completions for a tool."""
+    env_var = f"_{env_prefix}_COMPLETE"
+    source_type = f"{shell_type}_source"
+    try:
+        result = subprocess.run(
+            [tool],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, env_var: source_type},
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _install_all_tool_completions(shell_type: str) -> None:
+    """Generate and install completions for all known Paperworlds CLI tools."""
+    for tool, env_prefix, aliases in _COMPLETABLE_TOOLS:
+        if not shutil.which(tool):
+            click.echo(f"  {tool}: not installed, skipping")
+            continue
+
+        completion = _generate_tool_completion(tool, env_prefix, shell_type)
+        if completion is None:
+            click.echo(f"  {tool}: failed to generate completions, skipping")
+            continue
+
+        _write_tool_completion(tool, aliases, completion, shell_type)
+        names = [tool] + aliases
+        click.echo(f"  {', '.join(names)}: installed")
+
+
+def _write_tool_completion(
+    tool: str, aliases: list[str], completion: str, shell_type: str,
+) -> None:
+    """Write completion files for a tool and its aliases."""
+    if shell_type == "fish":
+        comp_dir = Path.home() / ".config" / "fish" / "completions"
+        comp_dir.mkdir(parents=True, exist_ok=True)
+        (comp_dir / f"{tool}.fish").write_text(completion)
+        for alias in aliases:
+            (comp_dir / f"{alias}.fish").write_text(
+                f"# Alias completions — wraps {tool}\n"
+                f"complete --command {alias} --wraps {tool}\n"
+            )
+
+    elif shell_type == "bash":
+        comp_dir = Path.home() / ".local" / "share" / "bash-completion" / "completions"
+        comp_dir.mkdir(parents=True, exist_ok=True)
+        (comp_dir / tool).write_text(completion)
+        for alias in aliases:
+            (comp_dir / alias).write_text(
+                f"# Alias completions — wraps {tool}\n"
+                f"source {comp_dir / tool}\n"
+            )
+
+    elif shell_type == "zsh":
+        comp_dir = Path.home() / ".zsh" / "completions"
+        comp_dir.mkdir(parents=True, exist_ok=True)
+        content = completion
+        for alias in aliases:
+            content += f"\ncompdef {alias}={tool}\n"
+        (comp_dir / f"_{tool}").write_text(content)
+        # Hint if fpath not configured
+        zshrc = Path.home() / ".zshrc"
+        if zshrc.exists() and ".zsh/completions" not in zshrc.read_text():
+            click.echo(
+                f"  Note: add to .zshrc: fpath=(~/.zsh/completions $fpath); "
+                f"autoload -Uz compinit && compinit"
+            )
 
 
 def _install_posix_wrapper(rc_file: Path, marker: str, content: str) -> None:
