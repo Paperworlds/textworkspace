@@ -1329,6 +1329,70 @@ def test_dev_on_with_dev_root(tmp_path, monkeypatch):
     assert cfg["defaults"]["dev_root"] == str(dev_root)
 
 
+def test_dev_on_injects_with_editable_for_deps(tmp_path, monkeypatch):
+    """tw dev on should use --with-editable for textsessions -> textaccounts dep."""
+    config_dir = tmp_path / ".config" / "paperworlds"
+    config_dir.mkdir(parents=True)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", config_dir)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+
+    dev_root = tmp_path / "paperworlds"
+    dev_root.mkdir()
+    (dev_root / "textaccounts").mkdir()
+    (dev_root / "textsessions").mkdir()
+
+    # Capture all subprocess.run calls
+    calls = []
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/local/bin/{name}")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["dev", "on", str(dev_root)])
+    assert result.exit_code == 0
+
+    # textaccounts install should NOT have --with-editable (no deps)
+    ta_cmd = calls[0]
+    assert "--with-editable" not in ta_cmd
+
+    # textsessions install SHOULD have --with-editable for textaccounts
+    ts_cmd = calls[1]
+    assert "--with-editable" in ts_cmd
+    we_idx = ts_cmd.index("--with-editable")
+    assert "textaccounts" in ts_cmd[we_idx + 1]
+
+
+def test_aliases_command(monkeypatch):
+    """tw aliases should list available aliases for installed tools."""
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/local/bin/{name}")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["aliases"])
+    assert result.exit_code == 0
+    assert "tw" in result.output
+    assert "textworkspace" in result.output
+
+
+def test_aliases_skips_missing_tools(monkeypatch):
+    """tw aliases should skip tools not on PATH."""
+    def fake_which(name):
+        if name in ("textworkspace", "tw", "xtw"):
+            return f"/usr/local/bin/{name}"
+        return None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["aliases"])
+    assert result.exit_code == 0
+    assert "tw" in result.output
+    # textsessions/textaccounts not on PATH, should not appear
+    assert "textsessions" not in result.output
+
+
 def _yaml_load(path):
     import yaml as _y
     with open(path) as f:

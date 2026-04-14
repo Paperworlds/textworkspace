@@ -407,11 +407,49 @@ def which(tool: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw aliases — show available short aliases for installed tools
+# ---------------------------------------------------------------------------
+
+# Known aliases: short name -> full binary name
+_TOOL_ALIASES: dict[str, list[str]] = {
+    "textworkspace": ["tw", "xtw"],
+    "textsessions": ["ts"],
+    "textaccounts": ["ta"],
+    "paperagents": ["pp"],
+}
+
+
+@main.command()
+def aliases() -> None:
+    """Show available short aliases for installed tools.
+
+    Lists which binaries have short aliases (e.g. tw -> textworkspace)
+    and whether each alias is currently available on PATH.
+    """
+    for full_name, short_names in sorted(_TOOL_ALIASES.items()):
+        full_bin = shutil.which(full_name)
+        if not full_bin:
+            continue
+        for alias in short_names:
+            alias_bin = shutil.which(alias)
+            if alias_bin:
+                click.echo(f"  {alias:15s} -> {full_name:20s} ({alias_bin})")
+            else:
+                click.echo(f"  {alias:15s} -> {full_name:20s} (not installed)")
+
+
+# ---------------------------------------------------------------------------
 # tw dev — developer mode
 # ---------------------------------------------------------------------------
 
-# Python tools that can be installed from local repos
+# Python tools that can be installed from local repos.
+# Order matters: dependencies must come first.
+# deps maps tool -> list of other _PYTHON_TOOLS it needs injected via --with-editable.
 _PYTHON_TOOLS = ("textaccounts", "textsessions")
+_PYTHON_TOOL_DEPS: dict[str, list[str]] = {
+    "textaccounts": [],
+    "textsessions": ["textaccounts"],
+}
 
 
 @main.group(invoke_without_command=True)
@@ -488,12 +526,17 @@ def dev_on(dev_root: str | None) -> None:
             click.echo(f"  {name}: {repo_path} not found, skipping")
             continue
 
-        click.echo(f"  {name}: installing editable from {repo_path}")
-        result = subprocess.run(
-            ["uv", "tool", "install", "-e", str(repo_path), "--force"],
-            capture_output=True,
-            text=True,
-        )
+        cmd = ["uv", "tool", "install", "-e", str(repo_path), "--force"]
+        # Inject local editable deps so tools share the dev versions
+        for dep in _PYTHON_TOOL_DEPS.get(name, []):
+            dep_path = resolved_root / dep
+            if dep_path.exists():
+                cmd.extend(["--with-editable", str(dep_path)])
+
+        deps_label = _PYTHON_TOOL_DEPS.get(name, [])
+        extra = f" (with {', '.join(deps_label)})" if deps_label else ""
+        click.echo(f"  {name}: installing editable from {repo_path}{extra}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             click.echo(f"  {name}: ok")
             installed.append(name)
@@ -513,8 +556,10 @@ def dev_off() -> None:
 
     for name in _PYTHON_TOOLS:
         click.echo(f"  {name}: reinstalling from PyPI")
+        # Install with extras for tools that have optional deps on other tools
+        pkg = f"{name}[accounts]" if name == "textsessions" else name
         result = subprocess.run(
-            ["uv", "tool", "install", name, "--force"],
+            ["uv", "tool", "install", pkg, "--force"],
             capture_output=True,
             text=True,
         )
@@ -536,17 +581,23 @@ def dev_reinstall() -> None:
         click.echo("Not in developer mode. Run `tw dev on` first.")
         raise SystemExit(1)
 
+    resolved_root = Path(cfg.defaults.get("dev_root", ""))
     for name in _PYTHON_TOOLS:
         repo_path = _dev_repo_path(cfg, name)
         if not repo_path or not Path(repo_path).exists():
             click.echo(f"  {name}: skipping (not found)")
             continue
-        click.echo(f"  {name}: reinstalling from {repo_path}")
-        result = subprocess.run(
-            ["uv", "tool", "install", "-e", repo_path, "--force"],
-            capture_output=True,
-            text=True,
-        )
+
+        cmd = ["uv", "tool", "install", "-e", repo_path, "--force"]
+        for dep in _PYTHON_TOOL_DEPS.get(name, []):
+            dep_path = resolved_root / dep
+            if dep_path.exists():
+                cmd.extend(["--with-editable", str(dep_path)])
+
+        deps_label = _PYTHON_TOOL_DEPS.get(name, [])
+        extra = f" (with {', '.join(deps_label)})" if deps_label else ""
+        click.echo(f"  {name}: reinstalling from {repo_path}{extra}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             click.echo(f"  {name}: ok")
         else:
