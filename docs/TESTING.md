@@ -153,6 +153,28 @@ tw go work my-repo --no-servers
 
 ## textforums
 
+### Unit tests
+
+```bash
+just test-v -k forums              # all forums tests
+just test-v -k "forums and slug"   # slug generation only
+just test-v -k "forums and cli"    # CLI commands only
+```
+
+Tests in `tests/test_forums.py` use `tmp_path` as forums root — no real
+data is touched. See the test file for helpers: `_runner()`, `_make_thread()`,
+`_make_and_save()`.
+
+**Current coverage:**
+- Slug generation (6 tests): lowercase, punctuation, unicode, truncation
+- YAML round-trip: save/load preserves all fields
+- Data operations: add_entry, list_threads with status/tag filters
+- Resolution chain: get_root (env > config > default), get_author (4 levels)
+- All 7 CLI commands: new, list, show, add, close, reopen, edit
+- Integration: standalone `textforums` entry point, `tw forums` subcommand
+
+### Manual E2E — basic operations
+
 ```bash
 # Create thread
 textforums new --title "test thread" --content "hello" --tag test
@@ -187,6 +209,104 @@ textforums edit test-thread
 # Cleanup
 rm -rf ~/.textforums/test-thread
 ```
+
+### Manual E2E — agent coordination flow
+
+This simulates the pp injection scenario from `docs/FORUMS-AGENT-SPEC.md`.
+Use a temp root to avoid polluting real data:
+
+```bash
+export TEXTFORUMS_ROOT=$(mktemp -d)
+```
+
+**Step 1: Worker posts a blocker**
+
+```bash
+textforums new \
+    --title "load_sessions renamed to list_sessions" \
+    --tag textsessions --tag textworkspace --tag blocker \
+    --content "load_sessions() is now list_sessions() as of v0.4.0. All consumers must update imports."
+# Should print slug: load-sessions-renamed-to-list-sessions
+```
+
+**Step 2: pp queries for open blockers (simulated)**
+
+```bash
+# This is what pp injection will run
+textforums list --tag textworkspace --status open
+# Should show the thread with status "open"
+
+textforums show load-sessions-renamed-to-list-sessions
+# Should show title, tags (textsessions, textworkspace, blocker), and entry
+```
+
+**Step 3: Another worker replies**
+
+```bash
+textforums add load-sessions-renamed-to-list-sessions \
+    --content "Updated imports in tw status — using list_sessions() now" \
+    --author worker-003
+
+textforums show load-sessions-renamed-to-list-sessions
+# Should show 2 entries (original + reply)
+```
+
+**Step 4: Lead closes the thread**
+
+```bash
+textforums close load-sessions-renamed-to-list-sessions \
+    --content "All consumers updated in prompts 003 and 004."
+
+# Verify it's gone from open queries
+textforums list --tag textworkspace --status open
+# Should show: No threads found.
+
+# But visible in resolved
+textforums list --status resolved
+# Should show the thread with status "resolved"
+```
+
+**Step 5: Cleanup**
+
+```bash
+rm -rf $TEXTFORUMS_ROOT
+unset TEXTFORUMS_ROOT
+```
+
+### Manual E2E — multi-repo tagging
+
+Tests that a single thread reaches agents in different repos:
+
+```bash
+export TEXTFORUMS_ROOT=$(mktemp -d)
+
+textforums new \
+    --title "YAML parser migration" \
+    --tag textworkspace --tag textsessions --tag paperagents --tag info \
+    --content "Switching from PyYAML to ruamel.yaml across all repos."
+
+# Each repo's pp injection would query its own tag
+textforums list --tag textworkspace --status open    # should find it
+textforums list --tag textsessions --status open     # should find it
+textforums list --tag paperagents --status open      # should find it
+textforums list --tag textworld --status open        # should NOT find it
+
+rm -rf $TEXTFORUMS_ROOT
+unset TEXTFORUMS_ROOT
+```
+
+### Test gaps (to be filled)
+
+These need unit tests in `tests/test_forums.py`:
+
+- **Tag round-trip**: `new --tag a --tag b` → load → verify both tags present
+- **Combined filters**: `list_threads(tag="x", status="open")` — both applied
+- **Error paths**: show/add/close on nonexistent slug → ClickException
+- **Duplicate slug**: `new` with same title twice → error
+- **Malformed YAML**: corrupt `thread.yaml` → `list_threads` skips it
+- **Multi-entry ordering**: 10+ entries stay in insertion order
+- **pp injection query**: the exact `list_threads(tag=repo, status="open")`
+  call that pp will make, verified against threads with mixed tags/statuses
 
 ---
 
