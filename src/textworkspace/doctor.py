@@ -176,6 +176,11 @@ def run_doctor_checks() -> list[CheckResult]:
     from textworkspace.config import CONFIG_FILE, load_config
 
     results: list[CheckResult] = []
+
+    # --- textworkspace itself ---
+    from textworkspace import __version__ as tw_version
+    results.append(CheckResult(label="textworkspace", detail=f"{tw_version}", status="ok"))
+
     tools = detect_installed_tools()
 
     # --- Per-tool checks ---
