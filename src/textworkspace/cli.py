@@ -34,6 +34,7 @@ from textworkspace.combos import (
     _source_to_url,
 )
 from textworkspace.config import CONFIG_DIR, CONFIG_FILE, ToolEntry, config_as_yaml, load_config, save_config
+from textworkspace.forums import forums as forums_group
 
 # ---------------------------------------------------------------------------
 # Optional integration imports — degrade gracefully if not installed
@@ -1397,3 +1398,10 @@ def config_edit() -> None:
     load_config()
     editor = os.environ.get("EDITOR", "vi")
     subprocess.run([editor, str(CONFIG_FILE)], check=False)
+
+
+# ---------------------------------------------------------------------------
+# forums sub-group
+# ---------------------------------------------------------------------------
+
+main.add_command(forums_group, "forums")

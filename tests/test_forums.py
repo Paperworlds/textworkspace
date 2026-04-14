@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from click.testing import CliRunner
 
 from textworkspace.forums import (
     Entry,
     Thread,
     ThreadMeta,
     add_entry,
+    cli,
+    forums,
     get_author,
     get_root,
     list_threads,
@@ -19,6 +23,7 @@ from textworkspace.forums import (
     slug_from_title,
     DEFAULT_ROOT,
 )
+from textworkspace.cli import main
 
 
 # ---------------------------------------------------------------------------
@@ -236,3 +241,166 @@ def test_get_author_user_env_last_resort(monkeypatch):
     from textworkspace.config import Config
     monkeypatch.setattr(cfg_mod, "load_config", lambda: Config())
     assert get_author() == "system-user"
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
+
+def _runner(tmp_path: Path) -> CliRunner:
+    return CliRunner(env={"TEXTFORUMS_ROOT": str(tmp_path), "TEXTFORUMS_AUTHOR": "tester"})
+
+
+# ---------------------------------------------------------------------------
+# test_forums_new_creates_file
+# ---------------------------------------------------------------------------
+
+def test_forums_new_creates_file(tmp_path):
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, ["new", "--title", "My First Thread", "--content", "Hello!"])
+    assert result.exit_code == 0, result.output
+    slug = result.output.strip()
+    thread_file = tmp_path / slug / "thread.yaml"
+    assert thread_file.exists()
+    thread = load_thread(tmp_path, slug)
+    assert thread.meta.title == "My First Thread"
+    assert len(thread.entries) == 1
+    assert thread.entries[0].content == "Hello!"
+
+
+# ---------------------------------------------------------------------------
+# test_forums_list_shows_thread
+# ---------------------------------------------------------------------------
+
+def test_forums_list_shows_thread(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Visible Thread", "--content", "content"])
+    result = runner.invoke(forums, ["list"])
+    assert result.exit_code == 0, result.output
+    assert "visible-thread" in result.output
+    assert "open" in result.output
+
+
+# ---------------------------------------------------------------------------
+# test_forums_show_displays_entries
+# ---------------------------------------------------------------------------
+
+def test_forums_show_displays_entries(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Show Me", "--content", "Entry content here"])
+    result = runner.invoke(forums, ["show", "show-me"])
+    assert result.exit_code == 0, result.output
+    assert "Show Me" in result.output
+    assert "Entry content here" in result.output
+
+
+def test_forums_show_raw(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Raw Thread", "--content", "raw content"])
+    result = runner.invoke(forums, ["show", "raw-thread", "--raw"])
+    assert result.exit_code == 0, result.output
+    assert "meta:" in result.output
+    assert "entries:" in result.output
+
+
+# ---------------------------------------------------------------------------
+# test_forums_add_appends_entry
+# ---------------------------------------------------------------------------
+
+def test_forums_add_appends_entry(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Add Test", "--content", "original"])
+    result = runner.invoke(forums, ["add", "add-test", "--content", "appended entry"])
+    assert result.exit_code == 0, result.output
+    thread = load_thread(tmp_path, "add-test")
+    assert len(thread.entries) == 2
+    assert thread.entries[-1].content == "appended entry"
+
+
+def test_forums_add_with_file(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "File Test", "--content", "initial"])
+    attachment = tmp_path / "note.txt"
+    attachment.write_text("attached")
+    result = runner.invoke(forums, ["add", "file-test", "--content", "with file", "--file", str(attachment)])
+    assert result.exit_code == 0, result.output
+    thread = load_thread(tmp_path, "file-test")
+    assert "note.txt" in thread.entries[-1].files
+
+
+# ---------------------------------------------------------------------------
+# test_forums_close_sets_resolved
+# ---------------------------------------------------------------------------
+
+def test_forums_close_sets_resolved(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Close Me", "--content", "open"])
+    result = runner.invoke(forums, ["close", "close-me"])
+    assert result.exit_code == 0, result.output
+    thread = load_thread(tmp_path, "close-me")
+    assert thread.meta.status == "resolved"
+
+
+def test_forums_close_with_content_appends_entry(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Close With Note", "--content", "open"])
+    runner.invoke(forums, ["close", "close-with-note", "--content", "closing note"])
+    thread = load_thread(tmp_path, "close-with-note")
+    assert thread.meta.status == "resolved"
+    assert thread.entries[-1].content == "closing note"
+
+
+# ---------------------------------------------------------------------------
+# test_forums_reopen
+# ---------------------------------------------------------------------------
+
+def test_forums_reopen(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Reopen Me", "--content", "open"])
+    runner.invoke(forums, ["close", "reopen-me"])
+    result = runner.invoke(forums, ["reopen", "reopen-me"])
+    assert result.exit_code == 0, result.output
+    thread = load_thread(tmp_path, "reopen-me")
+    assert thread.meta.status == "open"
+
+
+# ---------------------------------------------------------------------------
+# test_forums_edit_opens_editor
+# ---------------------------------------------------------------------------
+
+def test_forums_edit_opens_editor(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Edit Me", "--content", "before edit"])
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = None
+        result = runner.invoke(forums, ["edit", "edit-me"], env={"TEXTFORUMS_ROOT": str(tmp_path), "EDITOR": "nano"})
+    assert result.exit_code == 0, result.output
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    assert args[0] == "nano"
+    assert "thread.yaml" in args[1]
+
+
+# ---------------------------------------------------------------------------
+# test_standalone_entry_point
+# ---------------------------------------------------------------------------
+
+def test_standalone_entry_point(tmp_path, monkeypatch):
+    """cli() delegates to the forums group in standalone mode."""
+    monkeypatch.setenv("TEXTFORUMS_ROOT", str(tmp_path))
+    monkeypatch.setenv("TEXTFORUMS_AUTHOR", "tester")
+    import sys
+    monkeypatch.setattr(sys, "argv", ["textforums", "list"])
+    with pytest.raises(SystemExit) as exc_info:
+        cli()
+    assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# test_tw_forums_subcommand
+# ---------------------------------------------------------------------------
+
+def test_tw_forums_subcommand(tmp_path):
+    runner = CliRunner(env={"TEXTFORUMS_ROOT": str(tmp_path), "TEXTFORUMS_AUTHOR": "tester"})
+    result = runner.invoke(main, ["forums", "list"])
+    assert result.exit_code == 0, result.output

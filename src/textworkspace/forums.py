@@ -1,14 +1,20 @@
-"""Core data structures and I/O for textforums."""
+"""Core data structures, I/O, and CLI for textforums."""
 
 from __future__ import annotations
 
 import os
 import re
 import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
+import click
 import yaml
+
+from textworkspace import __version__
 
 DEFAULT_ROOT = Path.home() / ".textforums"
 
@@ -200,3 +206,245 @@ def add_entry(thread: Thread, entry: Entry, files: list[Path] | None = None) -> 
         entry.files = copied
     thread.entries.append(entry)
     save_thread(thread)
+
+
+# ---------------------------------------------------------------------------
+# Editor helper
+# ---------------------------------------------------------------------------
+
+def _open_in_editor(initial_text: str) -> str:
+    """Open $EDITOR with initial_text and return the edited content."""
+    editor = os.environ.get("EDITOR", "vi")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(initial_text)
+        tmp = f.name
+    try:
+        subprocess.run([editor, tmp], check=True)
+        return Path(tmp).read_text()
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+@click.group()
+@click.version_option(__version__, "--version", "-V", prog_name="textforums")
+def forums() -> None:
+    """Manage textforums threads."""
+
+
+def cli() -> None:
+    """Standalone entry point for the `textforums` binary."""
+    forums(standalone_mode=True)
+
+
+# ---------------------------------------------------------------------------
+# forums list
+# ---------------------------------------------------------------------------
+
+@forums.command("list")
+@click.option("--status", "-s", default=None, help="Filter by status (open/resolved).")
+@click.option("--tag", "-t", default=None, help="Filter by tag.")
+def forums_list(status: str | None, tag: str | None) -> None:
+    """List threads as a table."""
+    root = get_root()
+    threads = list_threads(root, status=status, tag=tag)
+    if not threads:
+        click.echo("No threads found.")
+        return
+
+    # Table header
+    header = f"{'SLUG':<35} {'STATUS':<10} {'ENTRIES':>7}  {'AGE':<12}  TITLE"
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    now = datetime.now(timezone.utc)
+    for t in threads:
+        slug = t.path.parent.name
+        try:
+            created = datetime.fromisoformat(t.meta.created.replace("Z", "+00:00"))
+            delta = now - created
+            days = delta.days
+            age = f"{days}d" if days > 0 else f"{delta.seconds // 3600}h"
+        except Exception:
+            age = "?"
+        click.echo(f"{slug:<35} {t.meta.status:<10} {len(t.entries):>7}  {age:<12}  {t.meta.title}")
+
+
+# ---------------------------------------------------------------------------
+# forums new
+# ---------------------------------------------------------------------------
+
+@forums.command("new")
+@click.option("--title", "-T", required=True, help="Thread title.")
+@click.option("--tag", "-t", "tags", multiple=True, help="Tag (repeatable).")
+@click.option("--author", "-a", default=None, help="Author name.")
+@click.option("--content", "-c", default=None, help="First entry content. Opens $EDITOR if omitted.")
+def forums_new(title: str, tags: tuple[str, ...], author: str | None, content: str | None) -> None:
+    """Create a new thread, optionally with a first entry."""
+    root = get_root()
+    slug = slug_from_title(title)
+    thread_dir = root / slug
+    if thread_dir.exists():
+        raise click.ClickException(f"Thread '{slug}' already exists.")
+
+    author = get_author(author)
+    now = _now_iso()
+    meta = ThreadMeta(title=title, created=now, author=author, tags=list(tags))
+    thread = Thread(meta=meta, entries=[], path=thread_dir / _THREAD_FILE)
+
+    if content is None:
+        template = (
+            f"# New entry for: {title}\n"
+            f"# Author: {author}\n"
+            "# Write your entry below this line:\n\n"
+        )
+        content = _open_in_editor(template).strip()
+        # Strip comment lines
+        lines = [l for l in content.splitlines() if not l.startswith("#")]
+        content = "\n".join(lines).strip()
+
+    if content:
+        entry = Entry(author=author, timestamp=now, status="open", content=content)
+        thread.entries.append(entry)
+
+    save_thread(thread)
+    click.echo(slug)
+
+
+# ---------------------------------------------------------------------------
+# forums show
+# ---------------------------------------------------------------------------
+
+@forums.command("show")
+@click.argument("slug")
+@click.option("--raw", is_flag=True, default=False, help="Dump raw YAML.")
+def forums_show(slug: str, raw: bool) -> None:
+    """Display a thread's metadata and entries."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    if raw:
+        click.echo(yaml.dump(_thread_to_dict(thread), default_flow_style=False, allow_unicode=True))
+        return
+
+    m = thread.meta
+    click.echo(f"Title:   {m.title}")
+    click.echo(f"Slug:    {slug}")
+    click.echo(f"Status:  {m.status}")
+    click.echo(f"Author:  {m.author}")
+    click.echo(f"Created: {m.created}")
+    if m.tags:
+        click.echo(f"Tags:    {', '.join(m.tags)}")
+    click.echo(f"\n{len(thread.entries)} entr{'y' if len(thread.entries) == 1 else 'ies'}:")
+    for i, e in enumerate(thread.entries, 1):
+        click.echo(f"\n--- [{i}] {e.author} @ {e.timestamp} ---")
+        if e.status:
+            click.echo(f"Status: {e.status}")
+        click.echo(e.content)
+        if e.files:
+            click.echo(f"Files: {', '.join(e.files)}")
+
+
+# ---------------------------------------------------------------------------
+# forums add
+# ---------------------------------------------------------------------------
+
+@forums.command("add")
+@click.argument("slug")
+@click.option("--content", "-c", default=None, help="Entry content. Opens $EDITOR if omitted.")
+@click.option("--author", "-a", default=None, help="Author name.")
+@click.option("--status", "-s", default="", help="Entry status tag.")
+@click.option("--file", "-f", "file_paths", multiple=True, type=click.Path(exists=True, path_type=Path), help="File to attach (repeatable).")
+def forums_add(slug: str, content: str | None, author: str | None, status: str, file_paths: tuple[Path, ...]) -> None:
+    """Append an entry to a thread."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    author = get_author(author)
+
+    if content is None:
+        template = (
+            f"# Adding entry to: {slug}\n"
+            f"# Author: {author}\n"
+            "# Write your entry below this line:\n\n"
+        )
+        content = _open_in_editor(template).strip()
+        lines = [l for l in content.splitlines() if not l.startswith("#")]
+        content = "\n".join(lines).strip()
+
+    entry = Entry(author=author, timestamp=_now_iso(), status=status, content=content)
+    add_entry(thread, entry, files=list(file_paths) if file_paths else None)
+    click.echo(f"Entry added to '{slug}'.")
+
+
+# ---------------------------------------------------------------------------
+# forums close
+# ---------------------------------------------------------------------------
+
+@forums.command("close")
+@click.argument("slug")
+@click.option("--content", "-c", default=None, help="Optional closing entry content.")
+@click.option("--author", "-a", default=None, help="Author name.")
+def forums_close(slug: str, content: str | None, author: str | None) -> None:
+    """Set a thread's status to 'resolved'."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    thread.meta.status = "resolved"
+    if content:
+        author = get_author(author)
+        entry = Entry(author=author, timestamp=_now_iso(), status="resolved", content=content)
+        thread.entries.append(entry)
+    save_thread(thread)
+    click.echo(f"Thread '{slug}' closed.")
+
+
+# ---------------------------------------------------------------------------
+# forums edit
+# ---------------------------------------------------------------------------
+
+@forums.command("edit")
+@click.argument("slug")
+def forums_edit(slug: str) -> None:
+    """Open the thread YAML in $EDITOR."""
+    root = get_root()
+    thread_file = root / slug / _THREAD_FILE
+    if not thread_file.exists():
+        raise click.ClickException(f"Thread '{slug}' not found.")
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(thread_file)], check=True)
+
+
+# ---------------------------------------------------------------------------
+# forums reopen
+# ---------------------------------------------------------------------------
+
+@forums.command("reopen")
+@click.argument("slug")
+def forums_reopen(slug: str) -> None:
+    """Set a thread's status back to 'open'."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    thread.meta.status = "open"
+    save_thread(thread)
+    click.echo(f"Thread '{slug}' reopened.")
