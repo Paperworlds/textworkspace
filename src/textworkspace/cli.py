@@ -1150,9 +1150,11 @@ def status() -> None:
     """
     rows: list[tuple[str, str]] = [
         ("profile", _status_profile()),
+        ("mode", _status_mode()),
         ("proxy", _status_proxy()),
         ("servers", _status_servers()),
         ("sessions", _status_sessions()),
+        ("combos", _status_combos()),
     ]
 
     label_width = max(len(r[0]) for r in rows)
@@ -1252,6 +1254,27 @@ def _status_sessions() -> str:
         return f"{total} total{today_part}"
     except Exception as exc:  # noqa: BLE001
         return f"(error: {exc})"
+
+
+def _status_mode() -> str:
+    cfg = load_config()
+    mode = cfg.defaults.get("mode", "user")
+    if mode == "developer":
+        dev_root = cfg.defaults.get("dev_root", "")
+        return f"developer ({dev_root})" if dev_root else "developer"
+    return mode
+
+
+def _status_combos() -> str:
+    try:
+        combos = load_combos()
+        if not combos:
+            return "none (run tw init)"
+        builtin = sum(1 for d in combos.values() if d.get("builtin"))
+        user = len(combos) - builtin
+        return f"{builtin} builtin + {user} user"
+    except Exception:  # noqa: BLE001
+        return "(error loading combos)"
 
 
 # ---------------------------------------------------------------------------
