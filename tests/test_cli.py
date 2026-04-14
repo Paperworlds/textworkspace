@@ -1,5 +1,7 @@
 """Tests for the textworkspace CLI entry point."""
 
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +30,7 @@ def test_version():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.2.0" in result.output
+    assert "0.2.1" in result.output
 
 
 def test_help():
@@ -1280,6 +1282,84 @@ def test_shell_install_fish(tmp_path, monkeypatch):
     content = tw_fish.read_text()
     assert "function tw" in content
     assert "_textworkspace_completion" in content
+
+
+def test_shell_install_all_fish(tmp_path, monkeypatch):
+    """tw shell install --fish --all writes completions for installed tools."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    # Pretend textforums and textaccounts are installed, textsessions is not
+    real_which = shutil.which
+
+    def fake_which(name):
+        if name in ("textforums", "textaccounts"):
+            return f"/usr/local/bin/{name}"
+        if name == "textsessions":
+            return None
+        if name == "paperagents":
+            return None
+        return real_which(name)
+
+    monkeypatch.setattr("shutil.which", fake_which)
+
+    # Mock subprocess.run to return fake completion output
+    _original_run = subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        env = kwargs.get("env", {})
+        for prefix in ("_TEXTFORUMS_COMPLETE", "_TEXTACCOUNTS_COMPLETE"):
+            if prefix in env:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout=f"# completions for {cmd[0]}\n", stderr=""
+                )
+        return _original_run(cmd, **kwargs)
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shell", "install", "--fish", "--all"])
+    assert result.exit_code == 0
+
+    # tw wrapper installed (existing behavior)
+    assert "Installed fish wrapper" in result.output
+
+    # Tool completions installed
+    comp_dir = tmp_path / ".config" / "fish" / "completions"
+    assert (comp_dir / "textforums.fish").exists()
+    assert (comp_dir / "textaccounts.fish").exists()
+    assert (comp_dir / "ta.fish").exists()  # alias
+    assert "ta.fish" in (comp_dir / "ta.fish").read_text() or "wraps" in (comp_dir / "ta.fish").read_text()
+
+    # Missing tools skipped
+    assert "textsessions: not installed" in result.output
+    assert "paperagents: not installed" in result.output
+
+
+def test_shell_install_all_skips_missing(tmp_path, monkeypatch):
+    """tw shell install --all skips all tools when none are on PATH."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shell", "install", "--fish", "--all"])
+    assert result.exit_code == 0
+
+    # No completion files should exist (only the tw wrapper)
+    comp_dir = tmp_path / ".config" / "fish" / "completions"
+    assert not comp_dir.exists() or not list(comp_dir.iterdir())
+
+
+def test_shell_install_without_all_unchanged(tmp_path, monkeypatch):
+    """tw shell install without --all does not write extra completion files."""
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["shell", "install", "--fish"])
+    assert result.exit_code == 0
+
+    # Only tw wrapper, no completions dir
+    comp_dir = tmp_path / ".config" / "fish" / "completions"
+    assert not comp_dir.exists() or not list(comp_dir.iterdir())
 
 
 def test_dev_on_requires_dev_root(tmp_path, monkeypatch):
