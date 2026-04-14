@@ -66,6 +66,22 @@ combos:
       - run: accounts switch {profile}
       - run: proxy restart
       - run: servers restart --tag default
+
+  go:
+    description: Switch profile, ensure servers, launch Claude session
+    builtin: true
+    args: [profile, repo]
+    options:
+      servers: true
+      tmux: false
+      name: ""
+    steps:
+      - run: switch {profile}
+      - shell: textserve start --tag {profile}
+        only_if: options.servers
+      - shell: textsessions new -r {repo} -p {profile} -n {name}
+      - shell: tmux new-window -n {name}
+        only_if: options.tmux
 """
 
 # ---------------------------------------------------------------------------
@@ -116,7 +132,11 @@ def _merge(
 # ---------------------------------------------------------------------------
 
 
-def evaluate_condition(condition: str) -> bool:
+def evaluate_condition(
+    condition: str,
+    *,
+    options: dict[str, Any] | None = None,
+) -> bool:
     """Return True if *condition* holds.
 
     Supported vocabulary:
@@ -125,10 +145,21 @@ def evaluate_condition(condition: str) -> bool:
       servers.running        — at least one textserve server is running
       servers.none_running   — no textserve servers are running
       accounts.active <name> — TW_PROFILE env var equals <name>
+      options.<key>          — truthy check on resolved combo option
     """
     parts = condition.strip().split(None, 1)
     key = parts[0]
     arg = parts[1] if len(parts) > 1 else None
+
+    if key.startswith("options."):
+        opt_key = key[len("options."):]
+        if options is None:
+            return False
+        val = options.get(opt_key, False)
+        # Falsy: False, 0, "", "false", "no", "0", None
+        if isinstance(val, str):
+            return val.lower() not in ("", "false", "no", "0")
+        return bool(val)
 
     if key == "proxy.running":
         return _is_proxy_running()
@@ -194,6 +225,34 @@ def _interpolate(template: str, args_map: dict[str, str]) -> str:
     return template
 
 
+def resolve_options(
+    name: str,
+    defn: dict[str, Any],
+    cli_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve combo options: combo defaults < config overrides < CLI flags."""
+    defaults = defn.get("options", {})
+    resolved = dict(defaults)
+
+    # Config-level overrides: combos.<name>.<key> in config.yaml
+    try:
+        from textworkspace.config import load_config
+        cfg = load_config()
+        config_combos = cfg.defaults.get("combos", {})
+        if isinstance(config_combos, dict) and name in config_combos:
+            combo_cfg = config_combos[name]
+            if isinstance(combo_cfg, dict):
+                resolved.update(combo_cfg)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # CLI flag overrides (highest priority)
+    if cli_overrides:
+        resolved.update(cli_overrides)
+
+    return resolved
+
+
 def run_combo(
     name: str,
     defn: dict[str, Any],
@@ -201,6 +260,7 @@ def run_combo(
     *,
     dry_run: bool = False,
     continue_on_error: bool = False,
+    options: dict[str, Any] | None = None,
 ) -> int:
     """Execute combo *name*.  Returns 0 on success, non-zero on first failure."""
     steps = defn.get("steps", [])
@@ -208,12 +268,26 @@ def run_combo(
         click.echo(f"combo '{name}': no steps defined")
         return 0
 
+    if options is None:
+        options = resolve_options(name, defn)
+
+    # Merge options into args_map for interpolation
+    full_args = dict(args_map)
+    for k, v in options.items():
+        if k not in full_args:
+            full_args[k] = str(v)
+
     if dry_run:
         click.echo(f"[dry-run] combo: {name}")
+        if options:
+            click.echo(f"  options: {options}")
 
     failed = 0
     for i, step in enumerate(steps, 1):
-        run_str = _interpolate(step.get("run", ""), args_map)
+        # Support both run: (tw subcommand) and shell: (external command)
+        is_shell = "shell" in step
+        raw_cmd = step.get("shell") or step.get("run", "")
+        cmd_str = _interpolate(raw_cmd, full_args)
         skip_if = step.get("skip_if")
         only_if = step.get("only_if")
 
@@ -221,27 +295,31 @@ def run_combo(
         reason = ""
 
         if skip_if:
-            if evaluate_condition(skip_if):
+            if evaluate_condition(skip_if, options=options):
                 skip = True
                 reason = f"skip_if '{skip_if}' is true"
 
         if not skip and only_if:
-            if not evaluate_condition(only_if):
+            if not evaluate_condition(only_if, options=options):
                 skip = True
                 reason = f"only_if '{only_if}' is false"
 
         if dry_run:
+            prefix = "shell" if is_shell else "run"
             status = "SKIP" if skip else "RUN"
             note = f"  ({reason})" if reason else ""
-            click.echo(f"  step {i}: {run_str}  [{status}]{note}")
+            click.echo(f"  step {i}: {prefix}: {cmd_str}  [{status}]{note}")
             continue
 
         if skip:
-            click.echo(f"  step {i}: {run_str}  [skipped — {reason}]")
+            click.echo(f"  step {i}: {cmd_str}  [skipped — {reason}]")
             continue
 
-        click.echo(f"  step {i}: {run_str}")
-        proc = subprocess.run(["textworkspace"] + shlex.split(run_str))
+        click.echo(f"  step {i}: {cmd_str}")
+        if is_shell:
+            proc = subprocess.run(shlex.split(cmd_str))
+        else:
+            proc = subprocess.run(["textworkspace"] + shlex.split(cmd_str))
         if proc.returncode != 0:
             click.echo(f"  step {i}: failed (exit {proc.returncode})", err=True)
             failed += 1

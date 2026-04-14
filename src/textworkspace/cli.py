@@ -27,6 +27,7 @@ from textworkspace.combos import (
     install_combo,
     list_installed_combos,
     load_combos,
+    resolve_options,
     run_combo,
     search_community,
     update_combo,
@@ -120,19 +121,48 @@ class _ComboGroup(click.Group):
 
 
 def _make_combo_command(name: str, defn: dict[str, Any]) -> click.Command:
-    """Build a click.Command that runs a combo."""
+    """Build a click.Command that runs a combo.
 
+    If the combo defines ``options:``, each boolean option becomes a
+    ``--<key>/--no-<key>`` CLI flag, and string options become ``--<key> VALUE``.
+    """
+    combo_options = defn.get("options", {})
+
+    # Build the command function
     @click.command(name=name, help=defn.get("description", f"Run the '{name}' combo."))
     @click.argument("args", nargs=-1)
     @click.option("--continue", "continue_on_error", is_flag=True, help="Continue on step failure.")
     @click.pass_context
-    def _cmd(ctx: click.Context, args: tuple[str, ...], continue_on_error: bool) -> None:
+    def _cmd(ctx: click.Context, args: tuple[str, ...], continue_on_error: bool, **opt_kwargs: Any) -> None:
         dry_run = (ctx.obj or {}).get("dry_run", False)
         arg_names: list[str] = defn.get("args", [])
         args_map = {arg_names[i]: args[i] for i in range(min(len(arg_names), len(args)))}
-        rc = run_combo(name, defn, args_map, dry_run=dry_run, continue_on_error=continue_on_error)
+
+        # Build CLI overrides — only include options explicitly passed by user
+        cli_overrides = {}
+        for key, val in opt_kwargs.items():
+            if val is not None:
+                cli_overrides[key] = val
+
+        options = resolve_options(name, defn, cli_overrides)
+        rc = run_combo(name, defn, args_map, dry_run=dry_run, continue_on_error=continue_on_error, options=options)
         if rc != 0:
             raise SystemExit(rc)
+
+    # Attach option flags dynamically based on combo options: block
+    for key, default_val in combo_options.items():
+        if isinstance(default_val, bool):
+            _cmd = click.option(
+                f"--{key}/--no-{key}",
+                default=None,
+                help=f"Toggle {key} (default: {default_val}).",
+            )(_cmd)
+        else:
+            _cmd = click.option(
+                f"--{key}",
+                default=None,
+                help=f"Set {key} (default: {default_val!r}).",
+            )(_cmd)
 
     return _cmd
 
@@ -601,8 +631,11 @@ def dev_reinstall() -> None:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             click.echo(f"  {name}: ok")
+            cfg.tools[name] = ToolEntry(version="", source="dev", bin=shutil.which(name))
         else:
             click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
+
+    save_config(cfg)
 
 
 # ---------------------------------------------------------------------------

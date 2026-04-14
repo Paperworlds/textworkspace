@@ -248,7 +248,7 @@ def run_doctor_checks() -> list[CheckResult]:
     else:
         results.append(CheckResult(
             label="fish", detail="tw.fish not found", status="warn",
-            fix="run: tw shell --fish > ~/.config/fish/functions/tw.fish",
+            fix="run: tw shell install --fish",
         ))
 
     # --- Proxy check ---

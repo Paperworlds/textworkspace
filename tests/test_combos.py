@@ -18,6 +18,7 @@ from textworkspace.combos import (
     _are_servers_running,
     evaluate_condition,
     load_combos,
+    resolve_options,
     run_combo,
     COMBOS_FILE,
     COMBOS_DIR,
@@ -233,7 +234,7 @@ class TestRunCombo:
 
     def test_skip_if_true_skips_step(self, monkeypatch):
         calls = []
-        monkeypatch.setattr("textworkspace.combos.evaluate_condition", lambda c: True)
+        monkeypatch.setattr("textworkspace.combos.evaluate_condition", lambda c, **kw: True)
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
@@ -246,7 +247,7 @@ class TestRunCombo:
 
     def test_only_if_false_skips_step(self, monkeypatch):
         calls = []
-        monkeypatch.setattr("textworkspace.combos.evaluate_condition", lambda c: False)
+        monkeypatch.setattr("textworkspace.combos.evaluate_condition", lambda c, **kw: False)
 
         def fake_run(cmd, **kw):
             calls.append(cmd)
@@ -297,7 +298,7 @@ class TestDryRun:
         assert "serve" in out
 
     def test_dry_run_shows_skip_label(self, monkeypatch, capsys):
-        monkeypatch.setattr("textworkspace.combos.evaluate_condition", lambda c: True)
+        monkeypatch.setattr("textworkspace.combos.evaluate_condition", lambda c, **kw: True)
         monkeypatch.setattr("textworkspace.combos.subprocess.run", lambda *a, **k: MagicMock(returncode=0))
         run_combo("x", self._defn([{"run": "serve", "skip_if": "proxy.running"}]), {}, dry_run=True)
         out = capsys.readouterr().out
@@ -433,3 +434,170 @@ class TestDynamicComboDispatch:
         runner = CliRunner()
         result = runner.invoke(main, ["--help"])
         assert "myworkflow" in result.output
+
+
+# ---------------------------------------------------------------------------
+# shell: steps (external commands)
+# ---------------------------------------------------------------------------
+
+class TestShellSteps:
+    def _defn(self, steps):
+        return {"description": "test", "steps": steps}
+
+    def test_shell_step_runs_directly(self, monkeypatch):
+        """shell: steps should not prepend 'textworkspace'."""
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("textworkspace.combos.subprocess.run", fake_run)
+        rc = run_combo("x", self._defn([{"shell": "textsessions new -r myrepo"}]), {})
+        assert rc == 0
+        assert calls == [["textsessions", "new", "-r", "myrepo"]]
+
+    def test_run_step_prepends_textworkspace(self, monkeypatch):
+        """run: steps should still prepend 'textworkspace'."""
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("textworkspace.combos.subprocess.run", fake_run)
+        rc = run_combo("x", self._defn([{"run": "switch work"}]), {})
+        assert rc == 0
+        assert calls == [["textworkspace", "switch", "work"]]
+
+    def test_mixed_run_and_shell_steps(self, monkeypatch):
+        """Combo with both run: and shell: steps."""
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("textworkspace.combos.subprocess.run", fake_run)
+        steps = [
+            {"run": "switch work"},
+            {"shell": "textsessions new -r repo"},
+        ]
+        rc = run_combo("x", self._defn(steps), {})
+        assert rc == 0
+        assert calls[0][0] == "textworkspace"  # run: step
+        assert calls[1][0] == "textsessions"   # shell: step
+
+
+# ---------------------------------------------------------------------------
+# Options resolution and conditions
+# ---------------------------------------------------------------------------
+
+class TestOptions:
+    def test_options_defaults_from_defn(self):
+        defn = {"options": {"servers": True, "tmux": False}}
+        opts = resolve_options("test", defn)
+        assert opts == {"servers": True, "tmux": False}
+
+    def test_options_config_override(self, tmp_path, monkeypatch):
+        """Config-level combos.<name>.<key> overrides combo defaults."""
+        from textworkspace.config import Config, save_config
+
+        config_dir = tmp_path / ".config" / "paperworlds"
+        config_dir.mkdir(parents=True)
+        monkeypatch.setattr("textworkspace.config.CONFIG_DIR", config_dir)
+        monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+
+        # Save config with combo override
+        cfg = Config()
+        cfg.defaults["combos"] = {"go": {"tmux": True}}
+        save_config(cfg)
+
+        defn = {"options": {"servers": True, "tmux": False}}
+        opts = resolve_options("go", defn)
+        assert opts["tmux"] is True  # overridden by config
+        assert opts["servers"] is True  # kept default
+
+    def test_options_cli_override_wins(self, monkeypatch):
+        """CLI flags override both defaults and config."""
+        defn = {"options": {"servers": True, "tmux": False}}
+        opts = resolve_options("go", defn, cli_overrides={"servers": False})
+        assert opts["servers"] is False
+
+    def test_evaluate_options_condition_true(self):
+        assert evaluate_condition("options.servers", options={"servers": True}) is True
+
+    def test_evaluate_options_condition_false(self):
+        assert evaluate_condition("options.tmux", options={"tmux": False}) is False
+
+    def test_evaluate_options_string_false(self):
+        assert evaluate_condition("options.name", options={"name": ""}) is False
+
+    def test_evaluate_options_string_true(self):
+        assert evaluate_condition("options.name", options={"name": "mysession"}) is True
+
+    def test_evaluate_options_missing_key(self):
+        assert evaluate_condition("options.missing", options={}) is False
+
+    def test_options_skip_step_via_only_if(self, monkeypatch):
+        """Steps with only_if: options.X should be skipped when option is false."""
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("textworkspace.combos.subprocess.run", fake_run)
+        defn = {
+            "description": "test",
+            "options": {"tmux": False},
+            "steps": [
+                {"run": "switch work"},
+                {"shell": "tmux new-window", "only_if": "options.tmux"},
+            ],
+        }
+        rc = run_combo("x", defn, {}, options={"tmux": False})
+        assert rc == 0
+        assert len(calls) == 1  # only the switch step ran
+        assert calls[0][0] == "textworkspace"
+
+    def test_options_interpolated_in_commands(self, monkeypatch):
+        """Option values should be available for {interpolation} in step commands."""
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        monkeypatch.setattr("textworkspace.combos.subprocess.run", fake_run)
+        defn = {
+            "description": "test",
+            "options": {"name": "mysession"},
+            "steps": [{"shell": "textsessions new -n {name}"}],
+        }
+        rc = run_combo("x", defn, {}, options={"name": "mysession"})
+        assert rc == 0
+        assert calls == [["textsessions", "new", "-n", "mysession"]]
+
+
+# ---------------------------------------------------------------------------
+# Default combos include "go"
+# ---------------------------------------------------------------------------
+
+class TestDefaultCombos:
+    def test_go_combo_in_defaults(self):
+        """The 'go' combo should be defined in DEFAULT_COMBOS_YAML."""
+        data = yaml.safe_load(DEFAULT_COMBOS_YAML)
+        assert "go" in data["combos"]
+        go = data["combos"]["go"]
+        assert "profile" in go["args"]
+        assert "repo" in go["args"]
+        assert "options" in go
+        # Should have both run: and shell: steps
+        step_types = set()
+        for step in go["steps"]:
+            if "shell" in step:
+                step_types.add("shell")
+            if "run" in step:
+                step_types.add("run")
+        assert step_types == {"run", "shell"}
