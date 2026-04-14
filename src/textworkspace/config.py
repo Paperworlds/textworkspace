@@ -42,6 +42,7 @@ class Config:
     dirs: SharedDirs = field(default_factory=SharedDirs)
     tools: dict[str, ToolEntry] = field(default_factory=dict)
     defaults: dict = field(default_factory=lambda: {"profile": "default", "proxy_autostart": False, "mode": "user"})
+    forums: dict = field(default_factory=dict)
 
 
 def _parse_repo(data: dict) -> RepoEntry:
@@ -95,6 +96,8 @@ def _config_to_dict(cfg: Config) -> dict:
     data["dirs"] = _dirs_to_dict(cfg.dirs)
     data["tools"] = {name: _tool_to_dict(t) for name, t in cfg.tools.items()}
     data["defaults"] = cfg.defaults
+    if cfg.forums:
+        data["forums"] = cfg.forums
     return data
 
 
@@ -115,7 +118,8 @@ def load_config() -> Config:
         for name, v in (raw.get("tools") or {}).items()
     }
     defaults = raw.get("defaults") or dict(_DEFAULT_DEFAULTS)
-    return Config(repos=repos, dirs=dirs, tools=tools, defaults=defaults)
+    forums = raw.get("forums") or {}
+    return Config(repos=repos, dirs=dirs, tools=tools, defaults=defaults, forums=forums)
 
 
 def save_config(cfg: Config) -> None:
