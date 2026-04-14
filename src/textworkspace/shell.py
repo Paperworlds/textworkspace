@@ -34,14 +34,6 @@ function xtw
     tw $argv
 end
 
-# Short aliases for other Paperworlds tools
-function ta
-    command textaccounts $argv
-end
-function ts
-    command textsessions $argv
-end
-
 # Tab completions (Click-generated)
 function _textworkspace_completion
     set -l response (env _TEXTWORKSPACE_COMPLETE=fish_complete COMP_WORDS=(commandline -cp) COMP_CWORD=(commandline -t) textworkspace)
