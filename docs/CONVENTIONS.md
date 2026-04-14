@@ -259,6 +259,59 @@ go stale. They are used:
 
 Run `tw init` to refresh them.
 
+## Shell conventions
+
+### Entry points vs fish function wrappers
+
+Commands that only read/write files can use pyproject `[project.scripts]`
+entry points. Commands that need to modify shell state (eval, export env
+vars, change directory) MUST use a shell function wrapper because pyproject
+entry points run in a subprocess.
+
+Pattern: the tool provides an `install` command that writes shell functions.
+See `textaccounts install` which generates `ta.fish` wrapping the
+`textaccounts` binary, so `ta switch` can export env vars in the calling
+shell.
+
+### Shell completions
+
+Every CLI tool in the stack MUST ship auto-completions for all three shells:
+**fish**, **bash**, and **zsh**. Completions should be generated and
+installed by the tool's `install` subcommand (or equivalent setup step).
+
+#### Implementation
+
+Click provides built-in completion support via `_<TOOL>_COMPLETE`:
+
+```bash
+# Generate completions
+_TEXTFORUMS_COMPLETE=fish_source textforums > ~/.config/fish/completions/textforums.fish
+_TEXTFORUMS_COMPLETE=bash_source textforums > ~/.local/share/bash-completion/completions/textforums
+_TEXTFORUMS_COMPLETE=zsh_source  textforums > ~/.zfunc/_textforums
+```
+
+For Go tools, use the completion subcommand pattern (`<tool> completion fish|bash|zsh`).
+
+#### Install command responsibilities
+
+The `install` subcommand (e.g., `tw shell install`, `textaccounts install`)
+MUST:
+
+1. Detect the current shell (fish, bash, zsh) or accept `--shell`
+2. Generate completions for the detected shell
+3. Write them to the correct platform path
+4. If the tool has aliases (e.g., `ta` for `textaccounts`, `tw` for
+   `textworkspace`), generate completions for each alias
+5. Print what was written so the user can verify
+
+#### Completion paths by shell
+
+| Shell | Path | Notes |
+|-------|------|-------|
+| fish | `~/.config/fish/completions/<tool>.fish` | Auto-loaded |
+| bash | `~/.local/share/bash-completion/completions/<tool>` | Requires `bash-completion` package |
+| zsh | `~/.zfunc/_<tool>` | Requires `fpath+=~/.zfunc` in `.zshrc` |
+
 ## Adding a new repo to the stack
 
 1. Decide: Python package or Go binary

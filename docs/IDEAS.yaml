@@ -1,6 +1,61 @@
 # textworkspace — Ideas Backlog
 # Ordered by priority within each category
 
+brainstorm:
+  - name: forums-agent-integration
+    title: Enforce forums usage in agent sessions
+    priority: 1
+    status: brainstorm
+    date: "2026-04-14"
+    description: >
+      How do we make agents actually use textforums for cross-repo coordination
+      instead of just logging BLOCKED? Five ideas, layered from convention to enforcement.
+    ideas:
+      - name: read-on-start
+        description: >
+          Agent checks forums at session begin. Add to prompt template or CLAUDE.md:
+          "Before starting work, run textforums list --tag <your-repo> and check
+          for threads relevant to your task." Lightweight, no enforcement.
+        effort: low
+        enforcement: none
+
+      - name: write-on-block
+        description: >
+          When an agent hits a cross-repo dependency, it posts a forum thread
+          (textforums new --tag <target-repo>) instead of just logging BLOCKED.
+          The next agent on that repo picks it up via read-on-start.
+        effort: low
+        enforcement: convention
+
+      - name: pp-context-injection
+        description: >
+          pp run auto-prepends relevant open forum threads to the prompt context
+          before spawning the worker. Runs textforums list --tag <repo> --status open,
+          formats output, appends to prompt. Agents can't skip what's in their context.
+        effort: medium
+        enforcement: automatic
+
+      - name: pp-post-task-scan
+        description: >
+          After a task completes, pp checks if the worker created any new forum
+          threads (new files in ~/.textforums/ since task start). Flags them in
+          notification and progress log. Surfaces cross-repo requests to the lead.
+        effort: medium
+        enforcement: visibility
+
+      - name: forums-as-dependency
+        description: >
+          A forum thread tagged "blocks:003" blocks a prompt from running until
+          the thread is resolved. pp run checks for blocking threads before spawning.
+          Hard enforcement — the DAG won't proceed until coordination is done.
+        effort: high
+        enforcement: hard
+
+    recommendation: >
+      Start with read-on-start + write-on-block as conventions. Then build
+      pp-context-injection as the real enforcement layer. Post-task scan and
+      dependency blocking are follow-ups once the pattern is validated.
+
 observability:
   - name: textctx
     title: Context window curator
