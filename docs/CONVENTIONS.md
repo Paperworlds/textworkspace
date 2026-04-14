@@ -61,6 +61,7 @@ Shared paths that other tools may read:
 | `~/.config/textproxy/config.json` | textproxy | yes | JSON |
 | `~/.local/state/claude-sessions/_cache.json` | textsessions | yes | JSON array |
 | `~/.local/state/claude-sessions/*.yaml` | textsessions | yes | YAML dict keyed by session ID |
+| `~/.textforums/<slug>/thread.yaml` | textforums | yes | YAML (meta + entries list) |
 
 ## Shared config — repos and dirs
 

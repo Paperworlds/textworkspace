@@ -16,11 +16,29 @@ src/textworkspace/
   config.py     — load/save ~/.config/paperworlds/config.yaml
   combos.py     — combo loading/execution engine
   bootstrap.py  — Go binary download/management via GitHub API
+  forums.py     — textforums thread management (data layer + CLI)
   status.py     — unified status display
   shell.py      — fish function generation
 tests/
   test_cli.py
+  test_forums.py
 ```
+
+## textforums
+
+Standalone thread/forum CLI. Threads are YAML files under `~/.textforums/<slug>/thread.yaml`.
+
+```bash
+textforums new --title "my thread" --content "hello" --tag bug
+textforums list [--status open|resolved] [--tag <tag>]
+textforums show <slug> [--raw]
+textforums add <slug> --content "reply" --status ack
+textforums close <slug> [--content "closing note"]
+textforums reopen <slug>
+textforums edit <slug>        # opens $EDITOR
+```
+
+Also available via `tw forums <subcommand>`. Root dir overridable via `$TEXTFORUMS_ROOT` or `config.forums.root`.
 
 ## Running
 
