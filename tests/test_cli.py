@@ -770,7 +770,7 @@ from textworkspace.doctor import (
 )
 
 
-def test_detect_python_tool_found(monkeypatch):
+def test_detect_python_tool_found(monkeypatch, tmp_path):
     """detect_python_tool returns installed=True when module is importable."""
     import importlib.util as _ilu
     import shutil as _sh
@@ -780,6 +780,9 @@ def test_detect_python_tool_found(monkeypatch):
     monkeypatch.setattr("importlib.metadata.version", lambda name: "1.2.3")
     # No binary on PATH — falls back to importlib.metadata for version
     monkeypatch.setattr(_sh, "which", lambda name: None)
+    # Isolate from real config so source stays "pypi"
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
 
     info = _detect_python_tool("textaccounts")
     assert info.installed is True
@@ -796,6 +799,8 @@ def test_detect_python_tool_prefers_binary_version(monkeypatch, tmp_path):
     fake_spec = object()
     monkeypatch.setattr(_ilu, "find_spec", lambda name: fake_spec)
     monkeypatch.setattr("importlib.metadata.version", lambda name: "0.5.4")
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
 
     fake_bin = tmp_path / "textsessions"
     fake_bin.write_text("#!/bin/sh\necho 'textsessions, version 0.6.0'\n")
@@ -807,13 +812,15 @@ def test_detect_python_tool_prefers_binary_version(monkeypatch, tmp_path):
     assert info.version == "0.6.0"  # binary wins over metadata
 
 
-def test_detect_python_tool_missing(monkeypatch):
+def test_detect_python_tool_missing(monkeypatch, tmp_path):
     """detect_python_tool returns installed=False when module is not found."""
     import importlib.util as _ilu
 
     monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
     import shutil as _sh
     monkeypatch.setattr(_sh, "which", lambda name: None)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
 
     info = _detect_python_tool("textaccounts")
     assert info.installed is False
@@ -826,6 +833,8 @@ def test_detect_python_tool_in_path_but_not_importable(monkeypatch, tmp_path):
     import shutil as _sh
 
     monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
+    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
     fake_bin = tmp_path / "textaccounts"
     fake_bin.touch()
     monkeypatch.setattr(_sh, "which", lambda name: str(fake_bin))

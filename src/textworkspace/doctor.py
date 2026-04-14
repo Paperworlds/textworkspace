@@ -55,6 +55,8 @@ def detect_installed_tools() -> dict[str, ToolInfo]:
 
 
 def _detect_python_tool(name: str) -> ToolInfo:
+    from textworkspace.config import load_config
+
     info = ToolInfo(name=name)
 
     # Check importability (normalise hyphens to underscores)
@@ -75,6 +77,15 @@ def _detect_python_tool(name: str) -> ToolInfo:
         if not info.installed:
             info.installed = True
             info.source = "path"
+
+    # Config may override source (e.g. "dev" from tw dev on/reinstall)
+    try:
+        cfg = load_config()
+        entry = cfg.tools.get(name)
+        if entry and entry.source:
+            info.source = entry.source
+    except Exception:  # noqa: BLE001
+        pass
 
     # Prefer binary --version over importlib.metadata (metadata can be stale
     # when tools are installed as uv tools with independent venvs)
