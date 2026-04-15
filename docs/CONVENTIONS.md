@@ -35,7 +35,7 @@ the stack.
 
 | Repo | Module | Exports |
 |------|--------|---------|
-| textaccounts | `textaccounts.api` | `list_profiles`, `env_for_profile`, `active_profile`, `resolve_profile`, `profile_dir`, `available`, `load_registry` |
+| textaccounts | `textaccounts.api` | `list_profiles`, `env_for_profile`, `active_profile`, `resolve_profile`, `profile_dir`, `available`, `load_registry` | <!-- stale 2026-04-15: resolve_profile lives in core.py, load_registry in config.py — neither is re-exported from api.py. See paperworlds/textaccounts/src/textaccounts/api.py for actual exports. --> |
 | textsessions | `textsessions.sessions` | `load_sessions`, `load_sessions_fast`, `filter_sessions`, `CACHE_PATH`, `STATE_DIR`, `Session` |
 | textsessions | `textsessions.config` | `Config` |
 | textproxy | CLI only | `textproxy stats`, `textproxy start/stop/restart`, `textproxy config --path` |
