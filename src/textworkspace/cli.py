@@ -11,6 +11,17 @@ from typing import Any
 import click
 
 from textworkspace import __version__
+
+try:
+    _git_hash = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"],
+        stderr=subprocess.DEVNULL,
+        text=True,
+        cwd=Path(__file__).parent,
+    ).strip()
+    _version_str = f"{__version__} ({_git_hash})"
+except Exception:
+    _version_str = __version__
 from textworkspace.bootstrap import (
     BIN_DIR,
     GITHUB_ORG,
@@ -168,7 +179,7 @@ def _make_combo_command(name: str, defn: dict[str, Any]) -> click.Command:
 
 
 @click.group(cls=_ComboGroup)
-@click.version_option(__version__, "--version", "-V", prog_name="textworkspace")
+@click.version_option(_version_str, "--version", "-V", prog_name="textworkspace")
 @click.option("--dry-run", is_flag=True, default=False, help="Print planned steps without executing.")
 @click.pass_context
 def main(ctx: click.Context, dry_run: bool) -> None:
@@ -508,7 +519,7 @@ def dev(ctx: click.Context) -> None:
     \b
     tw dev on        — enable dev mode, install tools editable
     tw dev off       — switch back to user mode (PyPI)
-    tw dev reinstall — re-run editable installs after version bumps
+    tw dev install   — re-run editable installs after version bumps
     tw dev           — show current mode
     """
     if ctx.invoked_subcommand is not None:
@@ -537,6 +548,31 @@ def _dev_repo_path(cfg: Any, tool_name: str) -> str | None:
         return None
     candidate = Path(dev_root).expanduser() / tool_name
     return str(candidate)
+
+
+def _tool_version(name: str, bin_path: str | None) -> str:
+    """Get installed version string from binary --version output."""
+    if not bin_path:
+        return "unknown"
+    try:
+        out = subprocess.check_output(
+            [bin_path, "--version"], stderr=subprocess.DEVNULL, text=True, timeout=3
+        ).strip()
+        # Extract "X.Y.Z (hash)" or just "X.Y.Z" from e.g. "tool, version X.Y.Z (hash)"
+        for word in out.split():
+            clean = word.rstrip(",")
+            if clean and (clean[0].isdigit() or (clean.startswith("v") and len(clean) > 1)):
+                # Grab version + optional parenthesised hash on same line
+                idx = out.index(word)
+                rest = out[idx:]
+                # Capture "X.Y.Z" or "X.Y.Z (hash)"
+                import re
+                m = re.search(r"(v?\d+\.\d+[\w.\-]*(?:\s+\(\w+\))?)", rest)
+                if m:
+                    return m.group(1)
+    except Exception:
+        pass
+    return "unknown"
 
 
 @dev.command("on")
@@ -618,9 +654,9 @@ def dev_off() -> None:
     click.echo("\nUser mode restored. dev_root preserved (run `tw dev on` to re-enable).")
 
 
-@dev.command("reinstall")
+@dev.command("install")
 def dev_reinstall() -> None:
-    """Re-install all dev tools (useful after pyproject.toml version bumps)."""
+    """Install all dev tools from local repos (editable). Runs after version bumps."""
     cfg = load_config()
     if cfg.defaults.get("mode") != "developer":
         click.echo("Not in developer mode. Run `tw dev on` first.")
@@ -641,11 +677,13 @@ def dev_reinstall() -> None:
 
         deps_label = _PYTHON_TOOL_DEPS.get(name, [])
         extra = f" (with {', '.join(deps_label)})" if deps_label else ""
-        click.echo(f"  {name}: reinstalling from {repo_path}{extra}")
+        click.echo(f"  {name}: installing from {repo_path}{extra}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
-            click.echo(f"  {name}: ok")
-            cfg.tools[name] = ToolEntry(version="", source="dev", bin=shutil.which(name))
+            bin_path = shutil.which(name)
+            version = _tool_version(name, bin_path)
+            click.echo(f"  {name}: ok  {version}")
+            cfg.tools[name] = ToolEntry(version=version, source="dev", bin=bin_path)
         else:
             click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
 

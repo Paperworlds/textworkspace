@@ -82,6 +82,12 @@ combos:
       - shell: textsessions new -r {repo} -p {profile} -n {name}
       - shell: tmux new-window -n {name}
         only_if: options.tmux
+
+  dev:
+    description: Reinstall all dev tools from local repos
+    builtin: true
+    steps:
+      - run: dev install
 """
 
 # ---------------------------------------------------------------------------
