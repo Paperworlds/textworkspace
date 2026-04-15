@@ -5,6 +5,85 @@ All notable changes to textworkspace are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] — 2026-04-15
+
+### Added
+
+- **`tw proxy`** group — manage textproxy daemon from textworkspace: `start`, `stop`, `restart`, `log`, `os`, `os-install`, `os-uninstall`, `setup`. `tw proxy` with no args shows running state.
+- **`tw tools`** group — third-party software registry: `list`, `add`, `install`. Register any binary (brew/url/script/path install methods). Persisted under `third_party:` in config.yaml.
+- **`tw dev install`** — now also builds Go tools from local repo checkouts via `just install` (falls back to `make`). textproxy is the first registered Go dev tool.
+- **`status.py`** — implemented proxy status via `textproxy status` subprocess. Parses running/stopped state, pid, port, version.
+- **`ThirdPartyEntry`** config schema — `bin`, `description`, `required`, `install` (method + value), `version`. Loads/saves round-trip cleanly.
+- **`tw doctor`** — shows all registered third-party tools with install status; `tw tools install <name>` fix hint.
+
+---
+
+## [v0.2.3] — 2026-04-15
+
+### Added
+
+- **`tw dev install`** — renamed from `tw dev reinstall`. Prints installed version (with git hash) after each tool.
+- **`sync` combo** — built-in combo that runs `tw dev install` to reinstall all dev tools in one step.
+- **Git hash in version string** — `tw --version` now shows `0.2.3 (abc1234)` when running from a git checkout. Matches textsessions convention.
+- **`tw doctor`** — shows textworkspace itself as the first entry. Source label reads from config (`dev` vs `pypi`) rather than hardcoding.
+
+### Fixed
+
+- `tw shell install` now translates `switch` → `show` for the textaccounts fish wrapper, fixing `ta switch <profile>` which had no `switch` subcommand.
+
+---
+
+## [v0.2.2] — 2026-04-14
+
+### Added
+
+- **`tw shell install`** — one-stop install for the full stack: generates fish functions and completions for textaccounts, textsessions, textworkspace, and all aliases.
+
+### Changed
+
+- Removed per-tool `ta`/`ts` fish alias generation from textworkspace — each tool now owns its own shell install.
+
+---
+
+## [v0.2.1] — 2026-04-14
+
+### Added
+
+- **`tw status`** — shows current dev mode and total combos count.
+- **Combo engine shell steps** — `shell:` step type for multi-line scripts; `options:` system for user-configurable combo parameters. Built-in `go` combo for profile + repo switching.
+
+### Fixed
+
+- `tw dev on` now includes textworkspace itself in editable installs so `tw` on PATH stays in sync.
+
+---
+
+## [v0.2.0] — 2026-04-14
+
+### Added
+
+- **`textforums`** standalone CLI — file-based async message board for cross-repo agent coordination. Threads stored as YAML at `~/.textforums/<slug>/thread.yaml`.
+- Commands: `new`, `list`, `show`, `add`, `close`, `reopen`, `edit`.
+- Also available as `tw forums <subcommand>`.
+- Config integration: `forums.root` and `forums.author` in `~/.config/paperworlds/config.yaml`.
+- `$TEXTFORUMS_ROOT` env override.
+
+---
+
+## [v0.1.1] — 2026-04-13
+
+### Added
+
+- **`tw dev`** command group — developer mode for working from local repo checkouts.
+  - `tw dev on [path]` — enable developer mode, install Python tools as editable uv tools.
+  - `tw dev off` — restore PyPI installs.
+  - `tw dev install` — re-run editable installs after version bumps.
+- **`tw shell install`** — generate fish functions and completions.
+- Tab completions for fish, bash, and zsh.
+- Session count (active today) in `tw status`.
+
+---
+
 ## [v0.1.0] — 2026-04-13
 
 ### Added

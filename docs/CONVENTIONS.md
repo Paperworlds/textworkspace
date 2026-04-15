@@ -257,12 +257,28 @@ after every commit. A session's worth of fixes and small features is one bump.
 
 Tag at the same time as the bump commit — tag = release. No separate "release commit" needed.
 
+### Changelog
+
+Every repo with a `CHANGELOG.md` **must** update it at bump time — not retroactively.
+Use [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format.
+
+**Rules:**
+- Add a new `## [vX.Y.Z] — YYYY-MM-DD` section before the previous version.
+- Group entries under `### Added`, `### Fixed`, `### Changed`, `### Removed`.
+- Each entry is one bullet: what changed and why it matters to a user. No implementation detail.
+- Link command names in backticks. No filler ("we now support…" → just state the fact).
+- Omit sections that have no entries.
+
+**Timing:** update the changelog in the same commit as the version bump (`chore: bump to vX.Y.Z`).
+Do not accumulate changelog debt — if you bump without updating it, update it immediately.
+
 ### Tagging releases
 
 ```bash
 # 1. Bump version in pyproject.toml (and __init__.py if present)
-# 2. Commit: "chore: bump to vX.Y.Z"
-# 3. Tag and push
+# 2. Update CHANGELOG.md — add section for the new version
+# 3. Commit: "chore: bump to vX.Y.Z"
+# 4. Tag and push
 git tag vX.Y.Z
 git push && git push --tags
 ```
