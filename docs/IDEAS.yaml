@@ -82,6 +82,66 @@ observability:
       changed, which files were touched, cost per action. Compliance-adjacent,
       pairs naturally with textproxy.
 
+workspace_profiles:
+  - name: tw-workspaces
+    title: Workspace profiles — join accounts + servers + project into one unit
+    priority: 1
+    status: specced          # full impl spec in prompts/010-workspace-profiles.yaml
+    date: "2026-04-15"
+    description: >
+      A `workspace` is a named config that joins three independent axes:
+      profile (textaccounts), servers (textserve tags or names), and project
+      (dir for textsessions tagging). `tw start <workspace>` replaces the
+      manual 3-step: accounts switch + mcpf start + textsessions new.
+      Workspaces live in config.yaml under a `workspaces:` key.
+    why: >
+      The `go` combo does this today but requires args every time and has
+      no named defaults. Workspaces make intent explicit and reusable.
+      Also unblocks proper textserve integration once CLAUDE_CONFIG_DIR
+      propagation is confirmed.
+    relation_to_go_combo: >
+      `tw go <profile> <repo>` is the current workaround. Workspaces
+      supersede it — `tw start data` is the same idea but config-driven
+      and aware of multiple axes. The `go` combo can delegate to `tw start`
+      once workspaces land.
+    key_design_points:
+      - Workspaces are the JOIN of tools, not a merger — profile and server-sets
+        stay independent so you can reuse them in different combinations.
+      - CLAUDE_CONFIG_DIR must be set in env before shelling out to mcpf so
+        server registration hits the right profile's claude.json.
+      - State written to ~/.config/paperworlds/state.yaml: active_workspace + started_at.
+      - Graceful degradation: each tool (textaccounts, textserve, textsessions)
+        is optional — missing tools warn and skip, they don't abort.
+    cli:
+      - "tw start <workspace>  — switch + start servers + new session"
+      - "tw stop <workspace>   — stop servers (don't switch profile back)"
+      - "tw workspaces list    — show all defined workspaces"
+      - "tw workspaces status  — active workspace + server/session state"
+      - "tw workspaces add     — interactive scaffold"
+      - "tw workspaces edit    — open config.yaml in $EDITOR"
+    example_config: |
+      workspaces:
+        data:
+          description: "Data work — Snowflake, Airflow"
+          profile: work
+          servers:
+            tags: [data]
+          project: ~/projects/personal/data-work
+        personal:
+          description: "Personal hacking"
+          profile: personal
+          servers:
+            names: [snowflake]
+          project: ~/projects/personal
+    blockers:
+      - textserve (mcpf) must read CLAUDE_CONFIG_DIR for registration — one-line
+        fix in internal/claude/claude.go configPath(). tw start works around
+        this by injecting CLAUDE_CONFIG_DIR into subprocess env.
+    files:
+      - src/textworkspace/workspace.py  (new)
+      - src/textworkspace/config.py     (extend with workspaces: key)
+      - src/textworkspace/cli.py        (tw start, tw stop, tw workspaces group)
+
 developer_workflow:
   - name: texthook
     title: Git hooks integration
