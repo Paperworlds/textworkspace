@@ -208,6 +208,7 @@ def run_doctor_checks() -> list[CheckResult]:
             results.append(CheckResult(label=name, detail="not installed", status=status, fix=fix))
 
     # --- Config check ---
+    cfg = None
     if CONFIG_FILE.exists():
         try:
             cfg = load_config()
@@ -266,6 +267,36 @@ def run_doctor_checks() -> list[CheckResult]:
             label="fish", detail="tw.fish not found", status="warn",
             fix="run: tw shell install --fish",
         ))
+
+    # --- Third-party tools check ---
+    try:
+        for tool_name, entry in (cfg.third_party if cfg else {}).items():
+            bin_name = entry.bin or tool_name
+            on_path = shutil.which(bin_name) is not None
+            if on_path:
+                # Try to get version
+                ver = ""
+                if entry.version:
+                    ver = entry.version
+                else:
+                    info = ToolInfo(name=tool_name, installed=True, bin_path=shutil.which(bin_name))
+                    _try_version_from_binary(info)
+                    ver = info.version or ""
+                ver_str = f"v{ver}  " if ver else ""
+                results.append(CheckResult(label=tool_name, detail=f"{ver_str}(third-party)", status="ok"))
+            else:
+                install_hint = ""
+                if entry.install:
+                    install_hint = f"  hint: {entry.install.method} {entry.install.value}"
+                status = "fail" if entry.required else "warn"
+                results.append(CheckResult(
+                    label=tool_name,
+                    detail=f"not installed{install_hint}",
+                    status=status,
+                    fix=f"run: tw tools install {tool_name}",
+                ))
+    except Exception:  # noqa: BLE001
+        pass
 
     # --- Proxy check ---
     proxy_port = _get_textproxy_port()

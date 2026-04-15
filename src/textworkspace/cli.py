@@ -507,6 +507,12 @@ _PYTHON_TOOL_DEPS: dict[str, list[str]] = {
     "textworkspace": [],
 }
 
+# Go tools that can be built from local repos via `just install`.
+# Each entry: (tool_name, just_recipe)  — recipe defaults to "install".
+_GO_TOOLS_DEV: list[tuple[str, str]] = [
+    ("textproxy", "install"),
+]
+
 
 @main.group(invoke_without_command=True)
 @click.pass_context
@@ -686,6 +692,35 @@ def dev_reinstall() -> None:
             cfg.tools[name] = ToolEntry(version=version, source="dev", bin=bin_path)
         else:
             click.echo(f"  {name}: failed — {result.stderr.strip()}", err=True)
+
+    # --- Go tools ---
+    for go_tool, just_recipe in _GO_TOOLS_DEV:
+        repo_path = _dev_repo_path(cfg, go_tool)
+        if not repo_path or not Path(repo_path).exists():
+            click.echo(f"  {go_tool}: skipping (not found in dev_root)")
+            continue
+
+        # Prefer `just <recipe>` if just is available, else fall back to make
+        just_bin = shutil.which("just")
+        make_bin = shutil.which("make")
+        if just_bin:
+            cmd = [just_bin, just_recipe]
+        elif make_bin:
+            cmd = [make_bin, just_recipe]
+        else:
+            click.echo(f"  {go_tool}: skipping (neither just nor make found)", err=True)
+            continue
+
+        click.echo(f"  {go_tool}: building from {repo_path} (just {just_recipe})")
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_path)
+        if result.returncode == 0:
+            bin_path = shutil.which(go_tool)
+            version = _tool_version(go_tool, bin_path)
+            click.echo(f"  {go_tool}: ok  {version}")
+            cfg.tools[go_tool] = ToolEntry(version=version, source="dev", bin=bin_path)
+        else:
+            err = (result.stderr or result.stdout).strip()
+            click.echo(f"  {go_tool}: failed — {err}", err=True)
 
     save_config(cfg)
 
@@ -1169,6 +1204,102 @@ def _print_stats_flat(data: dict) -> None:
         click.echo(json.dumps(data, indent=2))
         return
     click.echo("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# tw proxy — manage the textproxy daemon
+# ---------------------------------------------------------------------------
+
+
+def _textproxy_bin() -> str | None:
+    """Return path to textproxy binary or None."""
+    p = shutil.which("textproxy")
+    if p:
+        return p
+    managed = BIN_DIR / "textproxy"
+    if managed.exists():
+        return str(managed)
+    return None
+
+
+@main.group("proxy", invoke_without_command=True)
+@click.pass_context
+def proxy_cmd(ctx: click.Context) -> None:
+    """Manage the textproxy daemon.
+
+    \b
+    tw proxy            — show running state
+    tw proxy start      — start background daemon
+    tw proxy stop       — stop daemon
+    tw proxy restart    — restart daemon
+    tw proxy log        — tail daemon log
+    tw proxy os         — show launchd agent status
+    tw proxy os-install — install launchd agent (auto-start on login)
+    tw proxy setup      — generate CA cert + install to keychain
+    """
+    if ctx.invoked_subcommand is None:
+        _proxy_passthrough("status")
+
+
+def _proxy_passthrough(*args: str) -> None:
+    binary = _textproxy_bin()
+    if binary is None:
+        click.echo("proxy: textproxy not installed — run: tw update textproxy", err=True)
+        raise SystemExit(1)
+    result = subprocess.run([binary, *args], check=False)
+    raise SystemExit(result.returncode)
+
+
+@proxy_cmd.command("start")
+def proxy_start() -> None:
+    """Start textproxy as a background daemon."""
+    _proxy_passthrough("start")
+
+
+@proxy_cmd.command("stop")
+def proxy_stop() -> None:
+    """Stop the running textproxy daemon."""
+    _proxy_passthrough("stop")
+
+
+@proxy_cmd.command("restart")
+def proxy_restart() -> None:
+    """Restart the textproxy daemon."""
+    _proxy_passthrough("restart")
+
+
+@proxy_cmd.command("log")
+@click.option("-f", "--follow", is_flag=True, help="Follow log output.")
+def proxy_log(follow: bool) -> None:
+    """Tail the textproxy daemon log."""
+    if follow:
+        _proxy_passthrough("log", "-f")
+    else:
+        _proxy_passthrough("log")
+
+
+@proxy_cmd.command("os")
+def proxy_os() -> None:
+    """Show macOS launchd agent integration status."""
+    _proxy_passthrough("os")
+
+
+@proxy_cmd.command("os-install")
+def proxy_os_install() -> None:
+    """Install launchd agent — auto-start on login, restart on crash."""
+    _proxy_passthrough("os", "install")
+
+
+@proxy_cmd.command("os-uninstall")
+def proxy_os_uninstall() -> None:
+    """Remove launchd agent."""
+    _proxy_passthrough("os", "uninstall")
+
+
+@proxy_cmd.command("setup")
+def proxy_setup() -> None:
+    """Generate CA cert and install to system keychain (for HTTPS_PROXY mode)."""
+    _proxy_passthrough("setup")
 
 
 # ---------------------------------------------------------------------------
@@ -1661,6 +1792,176 @@ def config_edit() -> None:
     load_config()
     editor = os.environ.get("EDITOR", "vi")
     subprocess.run([editor, str(CONFIG_FILE)], check=False)
+
+
+# ---------------------------------------------------------------------------
+# tw tools — third-party software registry
+# ---------------------------------------------------------------------------
+
+
+@main.group("tools", invoke_without_command=True)
+@click.pass_context
+def tools_cmd(ctx: click.Context) -> None:
+    """Manage third-party tools tracked in the workspace registry.
+
+    \b
+    tw tools list           — show all registered tools with status
+    tw tools add            — register a new tool
+    tw tools install [NAME] — install one or all missing tools
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(tools_list)
+
+
+@tools_cmd.command("list")
+def tools_list() -> None:
+    """List all tracked third-party tools with their install status."""
+    from textworkspace.config import load_config
+
+    cfg = load_config()
+    if not cfg.third_party:
+        click.echo("No third-party tools registered. Use `tw tools add` to register one.")
+        return
+
+    for name, entry in cfg.third_party.items():
+        bin_name = entry.bin or name
+        installed = shutil.which(bin_name) is not None
+        status_icon = "✓" if installed else "✗"
+        desc = f"  {entry.description}" if entry.description else ""
+        ver = f"  v{entry.version}" if entry.version else ""
+        method = f"  [{entry.install.method}:{entry.install.value}]" if entry.install else ""
+        req = "  (required)" if entry.required else ""
+        click.echo(f"  {status_icon} {name}{ver}{desc}{method}{req}")
+
+
+@tools_cmd.command("add")
+@click.option("--name", required=True, help="Tool identifier (e.g. rtk)")
+@click.option("--bin", "bin_name", default=None, help="Binary name on PATH (defaults to --name)")
+@click.option("--description", default="", help="Short description")
+@click.option("--brew", default=None, help="Homebrew formula name")
+@click.option("--url", default=None, help="Direct download URL for the binary")
+@click.option("--script", default=None, help="Shell install command (piped to sh)")
+@click.option("--path", "local_path", default=None, help="Existing binary path (track only, no auto-install)")
+@click.option("--required", is_flag=True, default=False, help="Fail doctor if missing (default: warn)")
+def tools_add(
+    name: str,
+    bin_name: str | None,
+    description: str,
+    brew: str | None,
+    url: str | None,
+    script: str | None,
+    local_path: str | None,
+    required: bool,
+) -> None:
+    """Register a third-party tool in the workspace registry."""
+    from textworkspace.config import ThirdPartyEntry, ThirdPartyInstall, load_config, save_config
+
+    # Determine install method
+    install: ThirdPartyInstall | None = None
+    if brew:
+        install = ThirdPartyInstall(method="brew", value=brew)
+    elif url:
+        install = ThirdPartyInstall(method="url", value=url)
+    elif script:
+        install = ThirdPartyInstall(method="script", value=script)
+    elif local_path:
+        install = ThirdPartyInstall(method="path", value=local_path)
+
+    cfg = load_config()
+    entry = ThirdPartyEntry(
+        description=description,
+        bin=bin_name or name,
+        required=required,
+        install=install,
+    )
+    cfg.third_party[name] = entry
+    save_config(cfg)
+
+    method_str = f" ({install.method}: {install.value})" if install else " (no install method)"
+    click.echo(f"registered: {name}{method_str}")
+    click.echo(f"  run `tw tools install {name}` to install it now")
+
+
+@tools_cmd.command("install")
+@click.argument("name", required=False)
+def tools_install(name: str | None) -> None:
+    """Install one or all missing third-party tools.
+
+    Without NAME, installs all registered tools that aren't on PATH.
+    With NAME, installs that specific tool regardless of current state.
+    """
+    from textworkspace.config import ThirdPartyEntry, ToolEntry, load_config, save_config
+
+    cfg = load_config()
+    if not cfg.third_party:
+        click.echo("No third-party tools registered. Use `tw tools add` first.")
+        return
+
+    to_install: list[tuple[str, ThirdPartyEntry]] = []
+    if name:
+        if name not in cfg.third_party:
+            click.echo(f"tools install: '{name}' not in registry", err=True)
+            raise SystemExit(1)
+        to_install = [(name, cfg.third_party[name])]
+    else:
+        for n, e in cfg.third_party.items():
+            bin_name = e.bin or n
+            if not shutil.which(bin_name):
+                to_install.append((n, e))
+        if not to_install:
+            click.echo("All registered tools are already installed.")
+            return
+
+    for tool_name, entry in to_install:
+        if not entry.install:
+            click.echo(f"  {tool_name}: no install method configured — add one with `tw tools add`")
+            continue
+
+        method = entry.install.method
+        value = entry.install.value
+
+        if method == "brew":
+            click.echo(f"  {tool_name}: brew install {value}")
+            result = subprocess.run(["brew", "install", value], check=False)
+            ok = result.returncode == 0
+        elif method == "script":
+            click.echo(f"  {tool_name}: running install script")
+            result = subprocess.run(value, shell=True, check=False)  # noqa: S602
+            ok = result.returncode == 0
+        elif method == "path":
+            p = Path(value).expanduser()
+            if p.exists():
+                click.echo(f"  {tool_name}: found at {p}")
+                ok = True
+            else:
+                click.echo(f"  {tool_name}: path {p} does not exist", err=True)
+                ok = False
+        elif method == "url":
+            click.echo(f"  {tool_name}: downloading from {value}")
+            dest = Path.home() / ".local" / "bin" / (entry.bin or tool_name)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["curl", "-fsSL", "-o", str(dest), value], check=False
+            )
+            if result.returncode == 0:
+                dest.chmod(0o755)
+                click.echo(f"  {tool_name}: installed to {dest}")
+                ok = True
+            else:
+                click.echo(f"  {tool_name}: download failed", err=True)
+                ok = False
+        else:
+            click.echo(f"  {tool_name}: unknown install method '{method}'", err=True)
+            continue
+
+        if ok:
+            bin_path = shutil.which(entry.bin or tool_name)
+            ver = _tool_version(tool_name, bin_path) if bin_path else ""
+            if ver:
+                cfg.third_party[tool_name].version = ver
+                click.echo(f"  {tool_name}: ok  {ver}")
+
+    save_config(cfg)
 
 
 # ---------------------------------------------------------------------------
