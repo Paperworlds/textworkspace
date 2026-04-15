@@ -189,6 +189,61 @@ tw sync [--dry-run]
 2. **Go tools**: check config `tools.<name>.version` (set by `tw update`),
    fall back to `<tool> --version`.
 
+### Version string format
+
+All tools MUST display their version as:
+
+```
+<tool>, version X.Y.Z (githash)
+```
+
+The git short hash is appended in parentheses when running from a git repo.
+This makes it unambiguous whether a dev install is stale relative to HEAD.
+
+**Python tools** — add this block to `cli.py` before registering the Click group:
+
+```python
+import subprocess as _sp
+from <package> import __version__
+
+try:
+    _git_hash = _sp.check_output(
+        ["git", "rev-parse", "--short", "HEAD"],
+        stderr=_sp.DEVNULL, text=True,
+        cwd=Path(__file__).parent,
+    ).strip()
+    _version_str = f"{__version__} ({_git_hash})"
+except Exception:
+    _version_str = __version__
+
+@click.version_option(_version_str, "--version", "-V", prog_name="<tool>")
+```
+
+The `cwd=Path(__file__).parent` ensures git runs inside the package's repo,
+not whatever directory the user happens to be in.
+
+**Go tools** — inject via ldflags at build time, then append the short hash:
+
+```go
+// version.go
+var Version = "dev"
+var GitHash = ""
+
+func VersionString() string {
+    if GitHash != "" {
+        return Version + " (" + GitHash + ")"
+    }
+    return Version
+}
+```
+
+```makefile
+LDFLAGS = -X main.Version=$(VERSION) -X main.GitHash=$(shell git rev-parse --short HEAD)
+```
+
+**When the hash is absent** (e.g. installed from PyPI, not a git checkout),
+the version displays without parentheses. That is expected and correct.
+
 ### Tagging releases
 
 ```bash
