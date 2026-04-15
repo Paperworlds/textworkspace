@@ -142,6 +142,19 @@ workspace_profiles:
       - src/textworkspace/config.py     (extend with workspaces: key)
       - src/textworkspace/cli.py        (tw start, tw stop, tw workspaces group)
 
+spec_format:
+  - name: spec-template
+    title: Unified spec format — requirements, design, tasks, explore in one YAML
+    priority: 1
+    status: done
+    date: "2026-04-16"
+    spec: docs/SPEC-TEMPLATE.yaml
+    description: >
+      Single-file spec format combining EARS requirements, design, and ordered tasks.
+      Includes an optional explore: phase for discovery before implementation locks in.
+      See docs/SPEC-TEMPLATE.yaml for the canonical template and
+      prompts/010-workspace-profiles.yaml for a worked example.
+
 developer_workflow:
   - name: texthook
     title: Git hooks integration
