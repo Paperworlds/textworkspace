@@ -1,0 +1,289 @@
+id: "010"
+title: "Workspace profiles — join accounts + servers + project into one unit"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 2.00
+depends_on: ["005"]
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# EARS notation: WHEN [condition] THE SYSTEM SHALL [behavior]
+# Each requirement is independently testable and maps to ≥1 task.
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "tw start <name> is run with an unknown workspace name"
+    shall: "exit with a clear error message naming the unknown workspace"
+
+  - id: R02
+    when: "tw start <name> is run with a valid workspace"
+    shall: "execute profile switch, then server start, then session open — in that order, each step conditional on the next"
+
+  - id: R03
+    when: "a workspace config has both tags and names set under servers"
+    shall: "raise ValueError at load time with a message naming the offending workspace"
+
+  - id: R04
+    when: "profile field is empty or absent in a workspace config entry"
+    shall: "raise ValueError at load time with a message naming the offending workspace"
+
+  - id: R05
+    when: "textaccounts is not on PATH during tw start"
+    shall: "print a warning and skip the profile switch without aborting the remaining steps"
+
+  - id: R06
+    when: "mcpf is not on PATH during tw start"
+    shall: "print a warning and skip server start without aborting the remaining steps"
+
+  - id: R07
+    when: "textsessions is not on PATH during tw start"
+    shall: "print a warning and skip session launch without aborting the remaining steps"
+
+  - id: R08
+    when: "the workspace project path does not exist on disk during tw start"
+    shall: "print a warning and continue — server start and state write must still complete"
+
+  - id: R09
+    when: "mcpf is invoked by tw start"
+    shall: "receive CLAUDE_CONFIG_DIR set to the active profile's config dir in its subprocess environment"
+
+  - id: R10
+    when: "tw start completes all steps without aborting"
+    shall: "write active_workspace (string) and started_at (ISO-8601 UTC) to ~/.config/paperworlds/state.yaml"
+
+  - id: R11
+    when: "tw stop <name> is run"
+    shall: "stop the workspace's servers and remove active_workspace from state.yaml"
+
+  - id: R12
+    when: "tw stop <name> is run"
+    shall: "not switch the active profile — profile state is user-controlled"
+
+  - id: R13
+    when: "tw workspaces list is run"
+    shall: "display each workspace's name, description, profile, and server config (tags or names)"
+
+  - id: R14
+    when: "tw workspaces status is run"
+    shall: "display the active workspace name and started_at from state.yaml, or indicate that no workspace is active"
+
+  - id: R15
+    when: "tw workspaces add is run"
+    shall: "interactively prompt for name, description, profile, and servers, then append the new workspace to config.yaml"
+
+  - id: R16
+    when: "tw workspaces edit is run"
+    shall: "open config.yaml in $EDITOR (fallback vi)"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    A workspace is a named join of three independent axes: profile (which
+    Claude identity), servers (which MCP servers), and project (which repo).
+    The axes stay independent — workspaces are the join point, not a merger.
+
+    tw start replaces the manual 3-step: accounts switch + mcpf start + textsessions new.
+    tw stop reverses the server layer only; profile is never auto-reverted.
+
+  modules:
+    - path: src/textworkspace/workspace.py
+      role: "WorkspaceConfig dataclass + WorkspaceManager (start/stop/list/status). New file."
+    - path: src/textworkspace/config.py
+      role: "Extend to parse workspaces: key and return dict[str, WorkspaceConfig]."
+    - path: src/textworkspace/cli.py
+      role: "Add tw start, tw stop, tw workspaces group (list/status/add/edit)."
+
+  data_structures:
+    ServersConfig:
+      fields:
+        tags: "list[str]  # mcpf --tag"
+        names: "list[str]  # mcpf <name> [name...]"
+      invariant: "tags XOR names — validated at load time (R03)"
+
+    WorkspaceConfig:
+      fields:
+        name: "str  # key from config.yaml, injected on parse"
+        profile: "str  # required, non-empty (R04)"
+        servers: "ServersConfig  # default: empty (no servers)"
+        description: "str  # optional"
+        project: "str  # optional path, expanded with Path.expanduser()"
+        default_session_name: "str  # optional, passed to textsessions"
+
+    WorkspaceManager:
+      constructor: "__init__(self, cfg: Config)"
+      methods:
+        start: "start(name: str) -> None  # R02, R05–R10"
+        stop: "stop(name: str) -> None   # R11, R12"
+        list: "list() -> list[WorkspaceConfig]  # R13"
+        status: "status() -> dict | None  # R14, None if no active workspace"
+
+    StateFile:
+      path: "~/.config/paperworlds/state.yaml"
+      schema:
+        active_workspace: "str | None"
+        started_at: "str | None  # ISO-8601 UTC, e.g. 2026-04-15T10:30:00Z"
+
+  config_schema: |
+    workspaces:
+      data:
+        description: "Data work — Snowflake, Airflow, Airbyte"
+        profile: work
+        servers:
+          tags: [data]
+        project: ~/projects/personal/data-work
+        default_session_name: "data"
+      personal:
+        description: "Personal hacking"
+        profile: personal
+        servers:
+          names: [snowflake]
+        project: ~/projects/personal
+
+  sequence:
+    tw_start: |
+      1. load Config → get WorkspaceConfig[name]  (R01: abort if missing)
+      2. resolve profile_dir via textaccounts env_for_profile(ws.profile)
+         → shell out: textaccounts switch <profile>  (R05: warn+skip if missing)
+      3. build mcpf env: {**os.environ, CLAUDE_CONFIG_DIR: profile_dir}  (R09)
+      4. if ws.servers.tags:   mcpf start --tag <tags>   (R06: warn+skip if missing)
+         elif ws.servers.names: mcpf start <names>
+      5. if ws.project and Path(ws.project).exists():
+             textsessions new --project <project>       (R07: warn+skip if missing)
+         elif ws.project: warn missing dir, continue   (R08)
+      6. write state.yaml: active_workspace=name, started_at=utcnow  (R10)
+      7. print summary line
+
+    tw_stop: |
+      1. load Config → get WorkspaceConfig[name]
+      2. if ws.servers.tags:   mcpf stop --tag <tags>
+         elif ws.servers.names: mcpf stop <names>
+      3. clear active_workspace from state.yaml  (R11)
+      4. do NOT touch profile  (R12)
+
+  degradation:
+    principle: "Each tool call is isolated in try/except. A missing tool prints [WARN] and skips. Only an unknown workspace name is a hard abort."
+    pattern: |
+      try:
+          subprocess.run([bin, *args], check=True, env=env)
+      except FileNotFoundError:
+          click.echo(f"[WARN] {tool} not found — skipping", err=True)
+      except subprocess.CalledProcessError as e:
+          click.echo(f"[WARN] {tool} failed ({e.returncode}) — skipping", err=True)
+
+# ---------------------------------------------------------------------------
+# TASKS
+# status: pending | done
+# NOTE: status is LEAD-only — the implementing agent must NOT modify it.
+#       The lead updates status after reviewing the work, not the agent.
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: config-model
+    satisfies: [R03, R04]
+    status: pending  # LEAD only
+    do: |
+      Extend config.py:
+      - Add ServersConfig and WorkspaceConfig dataclasses (see design.data_structures).
+      - Add _parse_workspaces() and _workspaces_to_dict() helpers.
+      - Add workspaces: dict[str, WorkspaceConfig] field to Config (default empty).
+      - Wire into load_config() and _config_to_dict().
+      - Validate at parse time: tags XOR names (R03), profile non-empty (R04).
+    check:
+      - "WHEN a valid workspaces YAML is loaded, THE SYSTEM SHALL populate all WorkspaceConfig fields correctly"
+      - "WHEN servers.tags and servers.names are both set, THE SYSTEM SHALL raise ValueError naming the workspace"
+      - "WHEN profile is empty or absent, THE SYSTEM SHALL raise ValueError naming the workspace"
+
+  - id: T02
+    name: workspace-manager
+    satisfies: [R01, R02, R05, R06, R07, R08]
+    status: pending  # LEAD only
+    do: |
+      Create src/textworkspace/workspace.py with WorkspaceManager class.
+      Implement start(), stop(), list(), status() per design.sequence.
+      Each external tool call uses the degradation pattern in design.degradation.
+      start() hard-aborts (click.UsageError) only for unknown workspace name (R01).
+    check:
+      - "WHEN tw start is called with an unknown name, THE SYSTEM SHALL raise click.UsageError"
+      - "WHEN textaccounts is not on PATH, THE SYSTEM SHALL print [WARN] and continue with remaining steps"
+      - "WHEN mcpf is not on PATH, THE SYSTEM SHALL print [WARN] and continue with remaining steps"
+      - "WHEN textsessions is not on PATH, THE SYSTEM SHALL print [WARN] and continue with remaining steps"
+      - "WHEN project dir does not exist, THE SYSTEM SHALL print [WARN] and continue"
+      - "WHEN all tools are present, THE SYSTEM SHALL invoke profile switch before server start, and server start before session open"
+
+  - id: T03
+    name: env-propagation
+    satisfies: [R09]
+    status: pending  # LEAD only
+    do: |
+      In WorkspaceManager.start(), resolve profile_dir via textaccounts
+      env_for_profile(ws.profile) and pass env={**os.environ, 'CLAUDE_CONFIG_DIR': str(profile_dir)}
+      to every mcpf subprocess call. If textaccounts is unavailable, fall back to
+      os.environ (no CLAUDE_CONFIG_DIR injection) and warn.
+    check:
+      - "WHEN mcpf is invoked and textaccounts is available, THE SYSTEM SHALL pass CLAUDE_CONFIG_DIR in the subprocess env"
+      - "WHEN textaccounts is unavailable, THE SYSTEM SHALL invoke mcpf without CLAUDE_CONFIG_DIR and print [WARN]"
+
+  - id: T04
+    name: cli-commands
+    satisfies: [R01, R11, R12, R13, R14, R15, R16]
+    status: pending  # LEAD only
+    do: |
+      Add to cli.py following existing click patterns:
+      - tw start <workspace>: calls WorkspaceManager(cfg).start(name)
+      - tw stop <workspace>: calls WorkspaceManager(cfg).stop(name)
+      - tw workspaces group with subcommands:
+          list   → WorkspaceManager.list() formatted table
+          status → WorkspaceManager.status() or "no active workspace"
+          add    → interactive prompts, appends to config.yaml
+          edit   → subprocess.run([$EDITOR or "vi", config_path])
+    check:
+      - "WHEN tw start --help is run, THE SYSTEM SHALL display usage without error"
+      - "WHEN tw stop --help is run, THE SYSTEM SHALL display usage without error"
+      - "WHEN tw workspaces list is run, THE SYSTEM SHALL display a table with name, description, profile, and servers columns"
+      - "WHEN tw workspaces edit is run, THE SYSTEM SHALL open config.yaml in $EDITOR or vi"
+
+  - id: T05
+    name: state-tracking
+    satisfies: [R10, R11, R14]
+    status: pending  # LEAD only
+    do: |
+      In workspace.py, add _read_state() and _write_state() helpers.
+      start() calls _write_state(active_workspace=name, started_at=utcnow().isoformat())
+      stop() calls _write_state(active_workspace=None, started_at=None) or removes keys.
+      status() calls _read_state() and returns dict or None.
+      State file: ~/.config/paperworlds/state.yaml
+    check:
+      - "WHEN tw start completes, THE SYSTEM SHALL write active_workspace and started_at to state.yaml"
+      - "WHEN tw stop completes, THE SYSTEM SHALL clear active_workspace from state.yaml"
+      - "WHEN tw workspaces status is run after tw start, THE SYSTEM SHALL display the active workspace name and started_at"
+      - "WHEN tw workspaces status is run with no active workspace, THE SYSTEM SHALL indicate none active"
+
+  - id: T06
+    name: tests
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R14]
+    status: pending  # LEAD only
+    do: |
+      In tests/test_workspace.py:
+      - WorkspaceConfig validation: tags+names raises, empty profile raises
+      - WorkspaceManager.start() with monkeypatched subprocess: happy path calls in order
+      - WorkspaceManager.start() with each tool missing: warns and skips, continues
+      - WorkspaceManager.start() with missing project: warns and continues
+      - state read/write round-trip
+      - WorkspaceManager.stop() clears state, does not touch profile
+      All tests use tmp_path fixtures, no real ~/.config writes.
+    check:
+      - "WHEN uv run pytest tests/test_workspace.py -v is run, THE SYSTEM SHALL report all tests passing with zero failures"
+
+  - id: T07
+    name: commit
+    satisfies: []
+    status: pending  # LEAD only
+    do: "Commit: 'feat: workspace profiles — tw start/stop, tw workspaces group'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: workspace profiles commit"

@@ -1,0 +1,151 @@
+# ---------------------------------------------------------------------------
+# Paperworlds — Spec Format Template
+#
+# Every feature or bugfix that goes through a prompt agent uses this format.
+# One file per spec. All four sections (metadata, requirements, design, tasks)
+# live here. YAML over markdown — structured, parseable, diffable.
+#
+# ROLES
+#   LEAD   — the human (or orchestrator) who writes and owns the spec.
+#            The LEAD sets requirements, approves design, and marks tasks done.
+#   AGENT  — the implementing Claude session. Reads everything, touches only
+#            its own code and logs. Never modifies status fields.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# METADATA
+# ---------------------------------------------------------------------------
+
+id: "NNN"                     # three-digit prompt number, unique per repo
+title: "Short feature title"
+repo: textworkspace           # which repo this runs in
+model: sonnet                 # claude model: sonnet | opus | haiku
+phase: textworkspace          # logical phase label (matches repo or epic)
+budget_usd: 2.00              # max spend for this agent session
+depends_on: []                # ids that must be done first, e.g. ["005", "007"]
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+#
+# EARS notation: WHEN [triggering condition] THE SYSTEM SHALL [expected behavior]
+#
+# Rules:
+# - Every requirement must be independently testable.
+# - No ambiguous words: "should", "gracefully", "appropriately" are banned.
+# - Each requirement maps to ≥1 task via satisfies: [RXX].
+# - Add a note: field for context that doesn't fit the SHALL statement.
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "<triggering condition — user action, system event, or data state>"
+    shall: "<observable, unambiguous system behavior>"
+    # note: "optional — cross-references, edge cases, rationale"
+
+  - id: R02
+    when: "<another condition>"
+    shall: "<another behavior>"
+
+  # Error / degradation requirements follow the same pattern:
+  - id: R03
+    when: "<condition that could fail>"
+    shall: "print [WARN] <message> and skip <action> without aborting"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+#
+# The LEAD writes this before the agent starts. The agent MUST NOT deviate
+# from the design without flagging it in the progress log.
+#
+# Sections to include (omit if not applicable):
+#   overview       — one paragraph: what, why, key constraints
+#   modules        — files touched/created, one line role each
+#   data_structures — dataclasses, schemas, invariants
+#   config_schema  — YAML example of new config keys (literal block)
+#   sequence       — numbered step-by-step for each non-trivial flow
+#   degradation    — failure handling pattern, copy-paste ready
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    One paragraph. State what is being built, why it belongs here,
+    and any architectural constraints the agent must respect.
+
+  modules:
+    - path: src/<package>/new_module.py
+      role: "New file. What it owns."
+    - path: src/<package>/existing.py
+      role: "Extended. What changes."
+
+  data_structures:
+    ExampleConfig:
+      fields:
+        name: "str  # required"
+        value: "int  # optional, default 0"
+      invariant: "name must be non-empty — validated at load time (R01)"
+
+  config_schema: |
+    # Literal YAML example of any new config keys added to config.yaml
+    new_section:
+      key: value
+
+  sequence:
+    main_flow: |
+      1. step one  (RXX: what requirement this satisfies)
+      2. step two
+      3. step three
+
+  degradation:
+    principle: "One sentence on the failure philosophy."
+    pattern: |
+      try:
+          subprocess.run([bin, *args], check=True)
+      except FileNotFoundError:
+          click.echo(f"[WARN] {tool} not found — skipping", err=True)
+      except subprocess.CalledProcessError as e:
+          click.echo(f"[WARN] {tool} failed ({e.returncode}) — skipping", err=True)
+
+# ---------------------------------------------------------------------------
+# TASKS
+#
+# Ordered implementation steps. Each task:
+#   - satisfies: links back to requirement ids (may be empty for infra tasks)
+#   - do: instructions to the agent — concrete, not vague
+#   - check: EARS statements the agent verifies before moving on
+#   - status: LEAD-only — agent must NOT modify this field
+#
+# status values: pending | done
+# The LEAD sets done after reviewing the output, not the agent.
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: short-slug
+    satisfies: [R01, R02]
+    status: pending  # LEAD only
+    do: |
+      Concrete implementation instructions.
+      Reference design.data_structures and design.sequence by name.
+      One logical unit of work per task — commit after each.
+    check:
+      - "WHEN <condition>, THE SYSTEM SHALL <observable outcome>"
+      - "WHEN <another condition>, THE SYSTEM SHALL <another outcome>"
+
+  - id: T02
+    name: tests
+    satisfies: [R01, R02, R03]   # list all requirements covered by tests
+    status: pending  # LEAD only
+    do: |
+      Tests in tests/test_<module>.py.
+      Use tmp_path fixtures — no writes to real config dirs.
+      One test function per requirement. Name: test_<rid>_<slug>.
+    check:
+      - "WHEN pytest tests/test_<module>.py -v is run, THE SYSTEM SHALL report all tests passing with zero failures"
+
+  - id: T03
+    name: commit
+    satisfies: []
+    status: pending  # LEAD only
+    do: "Commit: '<type>: <short description>'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the commit"
