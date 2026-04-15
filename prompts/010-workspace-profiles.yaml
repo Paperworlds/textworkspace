@@ -7,6 +7,33 @@ budget_usd: 2.00
 depends_on: ["005"]
 
 # ---------------------------------------------------------------------------
+# EXPLORE  (remove once specced — answers informed the design below)
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "Does mcpf (textserve) already read CLAUDE_CONFIG_DIR, or does it hardcode ~/.claude?"
+      answer: "Hardcodes ~/.claude-work/.claude.json in internal/claude/claude.go configPath(). One-line fix available but not yet done. tw start must inject CLAUDE_CONFIG_DIR into subprocess env as workaround."
+
+    - id: U02
+      question: "What exact CLI signature does textsessions new --project accept — absolute path, relative, or tilde?"
+      answer: "Accepts any path string; internally calls Path(value).expanduser().resolve(). Tilde is safe."
+
+    - id: U03
+      question: "Does textaccounts env_for_profile return a Path or a string, and does it raise or return None for unknown profiles?"
+      answer: "Returns Path. Raises ProfileNotFoundError (subclass of ValueError) for unknown profiles. Callers must catch it."
+
+  findings: |
+    mcpf idempotency: mcpf start on an already-running server prints a warning and exits 0.
+    Safe to call unconditionally — no need for a pre-check in tw start.
+
+    textaccounts switch vs env_for_profile: switch sets CLAUDE_CONFIG_DIR in the *calling shell*
+    via a fish eval wrapper. From a subprocess context (tw start), the right call is
+    env_for_profile() to get the path, then inject it manually — not switch, which only
+    works in interactive fish sessions.
+
+# ---------------------------------------------------------------------------
 # REQUIREMENTS
 # EARS notation: WHEN [condition] THE SYSTEM SHALL [behavior]
 # Each requirement is independently testable and maps to ≥1 task.
@@ -183,8 +210,27 @@ design:
 # ---------------------------------------------------------------------------
 
 tasks:
+  # T00 was a discovery task — answers now live in explore: above.
+  # Kept here as a record; status set to done by LEAD after review.
+  - id: T00
+    name: explore-integrations
+    mode: explore
+    satisfies: []
+    status: done  # LEAD only — answers recorded in explore: section
+    checkpoint: true
+    do: |
+      Read the following before any implementation:
+      - textserve: internal/claude/claude.go → configPath() — does it read CLAUDE_CONFIG_DIR?
+      - textaccounts: api.py → env_for_profile() — return type, error behaviour for unknown profile
+      - textsessions: sessions.py or cli.py → new --project flag — path handling
+      - mcpf: what happens if start is called on an already-running server?
+      Log findings to progress log. Do not write code.
+    check:
+      - "WHEN the progress log is read, THE SYSTEM SHALL contain a clear answer to each question above"
+
   - id: T01
     name: config-model
+    mode: implement
     satisfies: [R03, R04]
     status: pending  # LEAD only
     do: |
@@ -201,6 +247,7 @@ tasks:
 
   - id: T02
     name: workspace-manager
+    mode: implement
     satisfies: [R01, R02, R05, R06, R07, R08]
     status: pending  # LEAD only
     do: |
@@ -218,6 +265,7 @@ tasks:
 
   - id: T03
     name: env-propagation
+    mode: implement
     satisfies: [R09]
     status: pending  # LEAD only
     do: |
@@ -231,6 +279,7 @@ tasks:
 
   - id: T04
     name: cli-commands
+    mode: implement
     satisfies: [R01, R11, R12, R13, R14, R15, R16]
     status: pending  # LEAD only
     do: |
@@ -250,6 +299,7 @@ tasks:
 
   - id: T05
     name: state-tracking
+    mode: implement
     satisfies: [R10, R11, R14]
     status: pending  # LEAD only
     do: |
@@ -266,6 +316,7 @@ tasks:
 
   - id: T06
     name: tests
+    mode: implement
     satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R14]
     status: pending  # LEAD only
     do: |
@@ -282,6 +333,7 @@ tasks:
 
   - id: T07
     name: commit
+    mode: implement
     satisfies: []
     status: pending  # LEAD only
     do: "Commit: 'feat: workspace profiles — tw start/stop, tw workspaces group'"

@@ -10,6 +10,16 @@
 #            The LEAD sets requirements, approves design, and marks tasks done.
 #   AGENT  — the implementing Claude session. Reads everything, touches only
 #            its own code and logs. Never modifies status fields.
+#
+# LIFECYCLE
+#   draft      → LEAD writes explore: unknowns, leaves requirements/design thin
+#   exploring  → a discovery AGENT reads codebase and fills in explore: answers
+#   specced    → LEAD reviews answers, hardens requirements + design, removes explore:
+#   active     → implementation AGENT works through tasks in order
+#   done       → all tasks marked done by LEAD
+#
+# When all unknowns are already resolved, skip explore: entirely and go straight
+# to requirements + design. Not every spec needs a discovery phase.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -23,6 +33,35 @@ model: sonnet                 # claude model: sonnet | opus | haiku
 phase: textworkspace          # logical phase label (matches repo or epic)
 budget_usd: 2.00              # max spend for this agent session
 depends_on: []                # ids that must be done first, e.g. ["005", "007"]
+
+# ---------------------------------------------------------------------------
+# EXPLORE  (optional — remove once specced)
+#
+# Used when the LEAD has open questions before requirements can be written.
+# A lightweight discovery AGENT answers the unknowns by reading the codebase,
+# running commands, or checking docs. The LEAD then uses those answers to
+# harden requirements: and design:, then removes this section.
+#
+# The discovery agent:
+#   - fills in answer: fields in place
+#   - appends to findings: with anything surprising
+#   - does NOT write code or modify any files outside this spec
+#
+# answers: and findings: are the only fields the discovery agent may write.
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "<specific yes/no or factual question about the codebase>"
+      answer: ""   # discovery agent fills in
+
+    - id: U02
+      question: "<another question — CLI flags, existing behaviour, file format, etc.>"
+      answer: ""   # discovery agent fills in
+
+  findings: |
+    # discovery agent appends here — anything surprising not captured in answers
 
 # ---------------------------------------------------------------------------
 # REQUIREMENTS
@@ -58,12 +97,12 @@ requirements:
 # from the design without flagging it in the progress log.
 #
 # Sections to include (omit if not applicable):
-#   overview       — one paragraph: what, why, key constraints
-#   modules        — files touched/created, one line role each
+#   overview        — one paragraph: what, why, key constraints
+#   modules         — files touched/created, one line role each
 #   data_structures — dataclasses, schemas, invariants
-#   config_schema  — YAML example of new config keys (literal block)
-#   sequence       — numbered step-by-step for each non-trivial flow
-#   degradation    — failure handling pattern, copy-paste ready
+#   config_schema   — YAML example of new config keys (literal block)
+#   sequence        — numbered step-by-step for each non-trivial flow
+#   degradation     — failure handling pattern, copy-paste ready
 # ---------------------------------------------------------------------------
 
 design:
@@ -109,18 +148,48 @@ design:
 # TASKS
 #
 # Ordered implementation steps. Each task:
-#   - satisfies: links back to requirement ids (may be empty for infra tasks)
-#   - do: instructions to the agent — concrete, not vague
-#   - check: EARS statements the agent verifies before moving on
-#   - status: LEAD-only — agent must NOT modify this field
+#   - mode:       explore | implement (default: implement)
+#                 explore  → agent has latitude to investigate and propose;
+#                            writes findings to the progress log, not code
+#                 implement → agent follows spec exactly; no latitude
+#   - satisfies:  links back to requirement ids (empty for infra tasks)
+#   - do:         instructions to the agent — concrete, not vague
+#   - check:      EARS statements the agent verifies before marking done
+#   - checkpoint: if true, agent must STOP after this task and wait for
+#                 LEAD review before continuing. Used after explore tasks
+#                 or at design decision points.
+#   - status:     LEAD-only — agent must NOT modify this field
 #
 # status values: pending | done
 # The LEAD sets done after reviewing the output, not the agent.
+#
+# Typical task order:
+#   [optional] T00 explore — discovery tasks with checkpoint: true
+#   T01..TN-2  implement   — one logical unit per task, commit after each
+#   TN-1       tests       — covers all Rs in satisfies
+#   TN         commit      — final commit message
 # ---------------------------------------------------------------------------
 
 tasks:
+  # -- optional: discovery before implementation --
+  - id: T00
+    name: explore-<slug>
+    mode: explore          # reads code, does not write it
+    satisfies: []
+    status: pending  # LEAD only
+    checkpoint: true       # STOP here — LEAD reviews before T01 starts
+    do: |
+      Read <files or modules>. Answer:
+      - Does X already exist, or must it be created?
+      - What does Y's current interface look like?
+      Log findings to the progress log. Do not write any code.
+    check:
+      - "WHEN the progress log is read, THE SYSTEM SHALL contain a clear answer to each question above"
+
+  # -- implementation tasks --
   - id: T01
     name: short-slug
+    mode: implement
     satisfies: [R01, R02]
     status: pending  # LEAD only
     do: |
@@ -133,6 +202,7 @@ tasks:
 
   - id: T02
     name: tests
+    mode: implement
     satisfies: [R01, R02, R03]   # list all requirements covered by tests
     status: pending  # LEAD only
     do: |
@@ -144,6 +214,7 @@ tasks:
 
   - id: T03
     name: commit
+    mode: implement
     satisfies: []
     status: pending  # LEAD only
     do: "Commit: '<type>: <short description>'"
