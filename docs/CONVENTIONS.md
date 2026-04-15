@@ -203,13 +203,13 @@ This makes it unambiguous whether a dev install is stale relative to HEAD.
 **Python tools** — add this block to `cli.py` before registering the Click group:
 
 ```python
-import subprocess as _sp
+import subprocess
 from <package> import __version__
 
 try:
-    _git_hash = _sp.check_output(
+    _git_hash = subprocess.check_output(
         ["git", "rev-parse", "--short", "HEAD"],
-        stderr=_sp.DEVNULL, text=True,
+        stderr=subprocess.DEVNULL, text=True,
         cwd=Path(__file__).parent,
     ).strip()
     _version_str = f"{__version__} ({_git_hash})"
@@ -263,14 +263,27 @@ Every repo with a `CHANGELOG.md` **must** update it at bump time — not retroac
 Use [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format.
 
 **Rules:**
-- Add a new `## [vX.Y.Z] — YYYY-MM-DD` section before the previous version.
-- Group entries under `### Added`, `### Fixed`, `### Changed`, `### Removed`.
+- Add a new `## vX.Y.Z` section before the previous version (no brackets, no date).
 - Each entry is one bullet: what changed and why it matters to a user. No implementation detail.
 - Link command names in backticks. No filler ("we now support…" → just state the fact).
-- Omit sections that have no entries.
+- Include a **Tests** table at the bottom of each release entry (see format below).
 
 **Timing:** update the changelog in the same commit as the version bump (`chore: bump to vX.Y.Z`).
 Do not accumulate changelog debt — if you bump without updating it, update it immediately.
+
+**Test confidence table** — append to every release entry so coverage can be tracked over time:
+
+```markdown
+**Tests — N passing, N skipped**
+
+| Area | Coverage | Notes |
+|---|---|---|
+| CLI commands | high | brief description of what's tested |
+| TUI app | medium | brief description |
+| Not covered | — | what's explicitly excluded and why |
+```
+
+Coverage levels: `high` (all happy + error paths), `medium` (happy paths only), `low` (smoke only), `none`.
 
 ### Tagging releases
 

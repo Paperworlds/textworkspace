@@ -48,6 +48,7 @@ Apply these when starting a refactor on any repo.
 - Import them explicitly: `from conftest import make_foo, make_bar`.
 - Regression tests are mandatory for every bug fix — add a test that would have caught it.
 - Keep fixtures small. Tests must complete in milliseconds.
+- After a refactor pass, include a test confidence table in the CHANGELOG entry (see CONVENTIONS.md).
 
 ---
 
