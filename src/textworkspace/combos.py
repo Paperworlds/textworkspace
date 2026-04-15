@@ -83,7 +83,7 @@ combos:
       - shell: tmux new-window -n {name}
         only_if: options.tmux
 
-  dev:
+  sync:
     description: Reinstall all dev tools from local repos
     builtin: true
     steps:
