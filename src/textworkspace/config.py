@@ -37,12 +37,30 @@ class ToolEntry:
 
 
 @dataclass
+class ThirdPartyInstall:
+    """Install method for a third-party tool."""
+    method: str  # "brew", "url", "script", "path" (path = just track, no auto-install)
+    value: str   # formula name, download URL, shell command, or binary path
+
+
+@dataclass
+class ThirdPartyEntry:
+    """A third-party tool tracked in the workspace registry."""
+    description: str = ""
+    bin: str = ""           # binary name to check on PATH (e.g. "rtk")
+    required: bool = False  # if True → doctor fails; if False → doctor warns
+    install: Optional[ThirdPartyInstall] = None
+    version: str = ""       # last known version, populated by tw tools install
+
+
+@dataclass
 class Config:
     repos: dict[str, RepoEntry] = field(default_factory=dict)
     dirs: SharedDirs = field(default_factory=SharedDirs)
     tools: dict[str, ToolEntry] = field(default_factory=dict)
     defaults: dict = field(default_factory=lambda: {"profile": "default", "proxy_autostart": False, "mode": "user"})
     forums: dict = field(default_factory=dict)
+    third_party: dict[str, ThirdPartyEntry] = field(default_factory=dict)
 
 
 def _parse_repo(data: dict) -> RepoEntry:
@@ -89,6 +107,39 @@ def _tool_to_dict(t: ToolEntry) -> dict:
     return d
 
 
+def _parse_third_party(data: dict) -> ThirdPartyEntry:
+    install: Optional[ThirdPartyInstall] = None
+    raw_install = data.get("install") or {}
+    if raw_install:
+        # First key is the method (brew, url, script, path)
+        for method in ("brew", "url", "script", "path"):
+            if method in raw_install:
+                install = ThirdPartyInstall(method=method, value=str(raw_install[method]))
+                break
+    return ThirdPartyEntry(
+        description=data.get("description", ""),
+        bin=data.get("bin", ""),
+        required=bool(data.get("required", False)),
+        install=install,
+        version=data.get("version", ""),
+    )
+
+
+def _third_party_to_dict(e: ThirdPartyEntry) -> dict:
+    d: dict = {}
+    if e.description:
+        d["description"] = e.description
+    if e.bin:
+        d["bin"] = e.bin
+    if e.required:
+        d["required"] = True
+    if e.install:
+        d["install"] = {e.install.method: e.install.value}
+    if e.version:
+        d["version"] = e.version
+    return d
+
+
 def _config_to_dict(cfg: Config) -> dict:
     data: dict = {}
     if cfg.repos:
@@ -98,6 +149,8 @@ def _config_to_dict(cfg: Config) -> dict:
     data["defaults"] = cfg.defaults
     if cfg.forums:
         data["forums"] = cfg.forums
+    if cfg.third_party:
+        data["third_party"] = {name: _third_party_to_dict(e) for name, e in cfg.third_party.items()}
     return data
 
 
@@ -119,7 +172,11 @@ def load_config() -> Config:
     }
     defaults = raw.get("defaults") or dict(_DEFAULT_DEFAULTS)
     forums = raw.get("forums") or {}
-    return Config(repos=repos, dirs=dirs, tools=tools, defaults=defaults, forums=forums)
+    third_party = {
+        name: _parse_third_party(v or {})
+        for name, v in (raw.get("third_party") or {}).items()
+    }
+    return Config(repos=repos, dirs=dirs, tools=tools, defaults=defaults, forums=forums, third_party=third_party)
 
 
 def save_config(cfg: Config) -> None:
