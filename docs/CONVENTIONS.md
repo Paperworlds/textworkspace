@@ -244,12 +244,24 @@ LDFLAGS = -X main.Version=$(VERSION) -X main.GitHash=$(shell git rev-parse --sho
 **When the hash is absent** (e.g. installed from PyPI, not a git checkout),
 the version displays without parentheses. That is expected and correct.
 
+### When to bump
+
+Bump after a **logical batch of related changes is done and working** — not
+after every commit. A session's worth of fixes and small features is one bump.
+
+| Increment | When |
+|-----------|------|
+| patch `0.x.Y` | Bug fixes, small features, doc/convention updates |
+| minor `0.X.0` | Meaningful new capability — new command, new integration, new TUI feature set |
+| major `X.0.0` | Breaking changes to config schema or public API |
+
+Tag at the same time as the bump commit — tag = release. No separate "release commit" needed.
+
 ### Tagging releases
 
 ```bash
-# In the tool's repo:
-# 1. Bump version in pyproject.toml (or Go ldflags)
-# 2. Commit: "release: vX.Y.Z"
+# 1. Bump version in pyproject.toml (and __init__.py if present)
+# 2. Commit: "chore: bump to vX.Y.Z"
 # 3. Tag and push
 git tag vX.Y.Z
 git push && git push --tags
