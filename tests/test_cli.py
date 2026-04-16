@@ -53,22 +53,16 @@ def test_help_shows_all_subcommands():
 # Config load / save / defaults
 # ---------------------------------------------------------------------------
 
-def test_load_config_creates_file_on_first_access(tmp_path, monkeypatch):
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
-
+def test_load_config_creates_file_on_first_access(config_dir):
     cfg = load_config()
-    assert (tmp_path / "config.yaml").exists()
+    assert (config_dir / "config.yaml").exists()
     assert isinstance(cfg, Config)
     assert isinstance(cfg.tools, dict)
     assert "profile" in cfg.defaults
 
 
-def test_save_and_round_trip(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_save_and_round_trip(config_dir):
+    cfg_file = config_dir / "config.yaml"
     cfg = Config(
         tools={
             "textaccounts": ToolEntry(version="0.3.1", source="pypi"),
@@ -97,15 +91,11 @@ def test_config_as_yaml_is_valid_yaml():
     assert parsed["defaults"]["profile"] == "default"
 
 
-def test_load_config_no_bin_omitted_from_yaml(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_load_config_no_bin_omitted_from_yaml(config_dir):
     cfg = Config(tools={"textaccounts": ToolEntry(version="0.3.1", source="pypi")})
     save_config(cfg)
 
-    raw = yaml.safe_load(cfg_file.read_text())
+    raw = yaml.safe_load((config_dir / "config.yaml").read_text())
     assert "bin" not in raw["tools"]["textaccounts"]
 
 
@@ -113,11 +103,7 @@ def test_load_config_no_bin_omitted_from_yaml(tmp_path, monkeypatch):
 # tw config command
 # ---------------------------------------------------------------------------
 
-def test_config_show_prints_yaml(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_config_show_prints_yaml(config_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["config"])
     assert result.exit_code == 0
@@ -125,11 +111,7 @@ def test_config_show_prints_yaml(tmp_path, monkeypatch):
     assert "defaults" in parsed
 
 
-def test_config_show_subcommand(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_config_show_subcommand(config_dir):
     runner = CliRunner()
     result = runner.invoke(main, ["config", "show"])
     assert result.exit_code == 0
@@ -140,11 +122,7 @@ def test_config_show_subcommand(tmp_path, monkeypatch):
 # tw which command
 # ---------------------------------------------------------------------------
 
-def test_which_known_tool(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_which_known_tool(config_dir):
     cfg = Config(tools={"textaccounts": ToolEntry(version="0.3.1", source="pypi")})
     save_config(cfg)
 
@@ -155,11 +133,7 @@ def test_which_known_tool(tmp_path, monkeypatch):
     assert "pypi" in result.output
 
 
-def test_which_tool_with_bin(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_which_tool_with_bin(config_dir):
     cfg = Config(tools={
         "textserve": ToolEntry(version="0.1.0", source="github", bin="~/.local/share/textworkspace/bin/textserve")
     })
@@ -172,11 +146,7 @@ def test_which_tool_with_bin(tmp_path, monkeypatch):
     assert "~/.local/share/textworkspace/bin/textserve" in result.output
 
 
-def test_which_unknown_tool(tmp_path, monkeypatch):
-    cfg_file = tmp_path / "config.yaml"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", cfg_file)
-
+def test_which_unknown_tool(config_dir):
     save_config(Config())
 
     runner = CliRunner()
@@ -770,7 +740,7 @@ from textworkspace.doctor import (
 )
 
 
-def test_detect_python_tool_found(monkeypatch, tmp_path):
+def test_detect_python_tool_found(monkeypatch, config_dir):
     """detect_python_tool returns installed=True when module is importable."""
     import importlib.util as _ilu
     import shutil as _sh
@@ -780,9 +750,6 @@ def test_detect_python_tool_found(monkeypatch, tmp_path):
     monkeypatch.setattr("importlib.metadata.version", lambda name: "1.2.3")
     # No binary on PATH — falls back to importlib.metadata for version
     monkeypatch.setattr(_sh, "which", lambda name: None)
-    # Isolate from real config so source stays "pypi"
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
 
     info = _detect_python_tool("textaccounts")
     assert info.installed is True
@@ -791,7 +758,7 @@ def test_detect_python_tool_found(monkeypatch, tmp_path):
     assert info.source == "pypi"
 
 
-def test_detect_python_tool_prefers_binary_version(monkeypatch, tmp_path):
+def test_detect_python_tool_prefers_binary_version(monkeypatch, config_dir):
     """detect_python_tool prefers --version output over importlib.metadata."""
     import importlib.util as _ilu
     import shutil as _sh
@@ -799,10 +766,8 @@ def test_detect_python_tool_prefers_binary_version(monkeypatch, tmp_path):
     fake_spec = object()
     monkeypatch.setattr(_ilu, "find_spec", lambda name: fake_spec)
     monkeypatch.setattr("importlib.metadata.version", lambda name: "0.5.4")
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
 
-    fake_bin = tmp_path / "textsessions"
+    fake_bin = config_dir / "textsessions"
     fake_bin.write_text("#!/bin/sh\necho 'textsessions, version 0.6.0'\n")
     fake_bin.chmod(0o755)
     monkeypatch.setattr(_sh, "which", lambda name: str(fake_bin))
@@ -812,30 +777,26 @@ def test_detect_python_tool_prefers_binary_version(monkeypatch, tmp_path):
     assert info.version == "0.6.0"  # binary wins over metadata
 
 
-def test_detect_python_tool_missing(monkeypatch, tmp_path):
+def test_detect_python_tool_missing(monkeypatch, config_dir):
     """detect_python_tool returns installed=False when module is not found."""
     import importlib.util as _ilu
 
     monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
     import shutil as _sh
     monkeypatch.setattr(_sh, "which", lambda name: None)
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
 
     info = _detect_python_tool("textaccounts")
     assert info.installed is False
     assert info.importable is False
 
 
-def test_detect_python_tool_in_path_but_not_importable(monkeypatch, tmp_path):
+def test_detect_python_tool_in_path_but_not_importable(monkeypatch, config_dir):
     """detect_python_tool marks installed=True if binary is on PATH even if not importable."""
     import importlib.util as _ilu
     import shutil as _sh
 
     monkeypatch.setattr(_ilu, "find_spec", lambda name: None)
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
-    fake_bin = tmp_path / "textaccounts"
+    fake_bin = config_dir / "textaccounts"
     fake_bin.touch()
     monkeypatch.setattr(_sh, "which", lambda name: str(fake_bin))
 
@@ -845,12 +806,12 @@ def test_detect_python_tool_in_path_but_not_importable(monkeypatch, tmp_path):
     assert info.source == "path"
 
 
-def test_detect_go_tool_in_bin_dir(tmp_path, monkeypatch):
+def test_detect_go_tool_in_bin_dir(monkeypatch, config_dir):
     """detect_installed_tools finds a Go binary in the managed BIN_DIR."""
     import shutil as _sh
     import textworkspace.doctor as _doc
 
-    bin_dir = tmp_path / "bin"
+    bin_dir = config_dir / "bin"
     bin_dir.mkdir()
     fake_binary = bin_dir / "textproxy"
     fake_binary.touch()
@@ -858,9 +819,6 @@ def test_detect_go_tool_in_bin_dir(tmp_path, monkeypatch):
     # Patch BIN_DIR in bootstrap and doctor, block PATH lookup
     monkeypatch.setattr("textworkspace.bootstrap.BIN_DIR", bin_dir)
     monkeypatch.setattr(_sh, "which", lambda name: None)
-    # Prevent config load from touching real fs
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
 
     tools = detect_installed_tools()
     assert tools["textproxy"].installed is True
@@ -868,17 +826,15 @@ def test_detect_go_tool_in_bin_dir(tmp_path, monkeypatch):
     assert tools["textproxy"].bin_path == str(fake_binary)
 
 
-def test_detect_go_tool_not_found(tmp_path, monkeypatch):
+def test_detect_go_tool_not_found(monkeypatch, config_dir):
     """detect_installed_tools returns installed=False when binary absent."""
     import shutil as _sh
 
-    bin_dir = tmp_path / "bin"
+    bin_dir = config_dir / "bin"
     bin_dir.mkdir()
 
     monkeypatch.setattr("textworkspace.bootstrap.BIN_DIR", bin_dir)
     monkeypatch.setattr(_sh, "which", lambda name: None)
-    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
-    monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)
 
     tools = detect_installed_tools()
     assert tools["textproxy"].installed is False
