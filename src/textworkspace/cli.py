@@ -577,7 +577,7 @@ def _tool_version(name: str, bin_path: str | None) -> str:
                 m = re.search(r"(v?\d+\.\d+[\w.\-]*(?:\s+\(\w+\))?)", rest)
                 if m:
                     return m.group(1)
-    except Exception:
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         pass
     return "unknown"
 
