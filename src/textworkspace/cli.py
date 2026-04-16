@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
+import socket
 import subprocess
+import yaml
 from pathlib import Path
 from typing import Any
 
@@ -72,8 +76,6 @@ try:
 
     def load_sessions() -> list[dict]:
         """Read all sessions from textsessions YAML index files."""
-        import yaml
-
         sessions: list[dict] = []
         for f in _TS_STATE_DIR.glob("*.yaml"):
             if f.name.startswith("_"):
@@ -572,7 +574,6 @@ def _tool_version(name: str, bin_path: str | None) -> str:
                 idx = out.index(word)
                 rest = out[idx:]
                 # Capture "X.Y.Z" or "X.Y.Z (hash)"
-                import re
                 m = re.search(r"(v?\d+\.\d+[\w.\-]*(?:\s+\(\w+\))?)", rest)
                 if m:
                     return m.group(1)
@@ -1005,7 +1006,6 @@ def _install_posix_wrapper(rc_file: Path, marker: str, content: str) -> None:
     if rc_file.exists():
         existing = rc_file.read_text()
         if marker in existing:
-            import re
             pattern = re.escape(marker) + r".*?" + re.escape(end_marker) + r"\n?"
             updated = re.sub(pattern, block, existing, flags=re.DOTALL)
             rc_file.write_text(updated)
@@ -1107,8 +1107,6 @@ def _proxy_stats_http(port: int = 0) -> dict:
 
 def _proxy_stats_subprocess() -> dict:
     """Fall back to `textproxy stats --json` subprocess."""
-    import json
-
     result = subprocess.run(
         ["textproxy", "stats", "--json"],
         capture_output=True,
@@ -1186,8 +1184,6 @@ def _print_stats_flat(data: dict) -> None:
         active_part = f" · {active} active" if active is not None else ""
         lines.append(f"  sessions {sessions_count}{active_part}")
     if not lines:
-        import json
-
         click.echo(json.dumps(data, indent=2))
         return
     click.echo("\n".join(lines))
@@ -1328,8 +1324,6 @@ def serve(name: str | None, tag: str | None, as_json: bool) -> None:
             return
 
         try:
-            import json
-
             servers = json.loads(result.stdout) if result.stdout.strip() else []
         except Exception:  # noqa: BLE001
             click.echo(result.stdout, nl=False)
@@ -1422,8 +1416,6 @@ def _status_profile() -> str:
 
 
 def _status_proxy() -> str:
-    import socket
-
     port = get_textproxy_port()
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
@@ -1452,8 +1444,6 @@ def _status_servers() -> str:
         )
         if result.returncode != 0:
             return f"(error: {result.stderr.strip()})"
-
-        import json
 
         servers = json.loads(result.stdout) if result.stdout.strip() else []
         if not isinstance(servers, list):
@@ -1583,19 +1573,17 @@ def combos_add(name: str) -> None:
     if args_list:
         entry["args"] = args_list
 
-    import yaml as _yaml  # noqa: PLC0415
-
-    snippet = _yaml.dump({name: entry}, default_flow_style=False, indent=2)
+    snippet = yaml.dump({name: entry}, default_flow_style=False, indent=2)
     click.echo("\nAdd this to your combos.yaml under 'combos:':\n")
     click.echo(snippet)
     if COMBOS_FILE.exists() and click.confirm("Append to combos.yaml now?", default=True):
         with COMBOS_FILE.open() as f:
-            existing = _yaml.safe_load(f) or {}
+            existing = yaml.safe_load(f) or {}
         if "combos" not in existing or not isinstance(existing["combos"], dict):
             existing["combos"] = {}
         existing["combos"][name] = entry
         with COMBOS_FILE.open("w") as f:
-            _yaml.dump(existing, f, default_flow_style=False)
+            yaml.dump(existing, f, default_flow_style=False)
         click.echo(f"  saved '{name}' to {COMBOS_FILE}")
 
 
