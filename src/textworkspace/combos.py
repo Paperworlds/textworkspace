@@ -13,7 +13,7 @@ from typing import Any
 import click
 import yaml
 
-from textworkspace.config import CONFIG_DIR
+from textworkspace.config import CONFIG_DIR, get_textproxy_port
 
 COMBOS_FILE = CONFIG_DIR / "combos.yaml"
 COMBOS_DIR = CONFIG_DIR / "combos.d"
@@ -21,18 +21,6 @@ COMBOS_DIR = CONFIG_DIR / "combos.d"
 COMMUNITY_REPO = "paperworlds/textcombos"
 _GH_RAW_BASE = "https://raw.githubusercontent.com"
 _GH_API_BASE = "https://api.github.com"
-
-_TEXTPROXY_DEFAULT_PORT = 9880
-
-
-def _get_textproxy_port() -> int:
-    import json
-    config_path = Path.home() / ".config" / "textproxy" / "config.json"
-    try:
-        data = json.loads(config_path.read_text())
-        return int(data["port"])
-    except Exception:  # noqa: BLE001
-        return _TEXTPROXY_DEFAULT_PORT
 
 # ---------------------------------------------------------------------------
 # Default combos written by tw init
@@ -184,7 +172,7 @@ def evaluate_condition(
 
 def _is_proxy_running() -> bool:
     try:
-        with socket.create_connection(("127.0.0.1", _get_textproxy_port()), timeout=1):
+        with socket.create_connection(("127.0.0.1", get_textproxy_port()), timeout=1):
             return True
     except OSError:
         return False

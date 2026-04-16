@@ -45,7 +45,7 @@ from textworkspace.combos import (
     _fetch_url,
     _source_to_url,
 )
-from textworkspace.config import CONFIG_DIR, CONFIG_FILE, ToolEntry, config_as_yaml, load_config, save_config
+from textworkspace.config import CONFIG_DIR, CONFIG_FILE, ToolEntry, config_as_yaml, get_textproxy_port, load_config, save_config
 from textworkspace.forums import forums as forums_group
 
 # ---------------------------------------------------------------------------
@@ -1095,19 +1095,6 @@ def sessions(query: str | None, limit: int) -> None:
 # tw stats [--session ID]
 # ---------------------------------------------------------------------------
 
-_TEXTPROXY_DEFAULT_PORT = 9880
-
-
-def _get_textproxy_port() -> int:
-    import json
-    config_path = Path.home() / ".config" / "textproxy" / "config.json"
-    try:
-        data = json.loads(config_path.read_text())
-        return int(data["port"])
-    except Exception:  # noqa: BLE001
-        return _TEXTPROXY_DEFAULT_PORT
-
-
 def _proxy_stats_http(port: int = 0) -> dict:
     """Query textproxy HTTP API; raises on any error."""
     import httpx  # local import — optional dep
@@ -1153,7 +1140,7 @@ def stats(session_id: str | None, port: int | None) -> None:
     Queries the HTTP API first; falls back to `textproxy stats --json`.
     """
     if port is None:
-        port = _get_textproxy_port()
+        port = get_textproxy_port()
     data: dict | None = None
 
     try:
@@ -1437,7 +1424,7 @@ def _status_profile() -> str:
 def _status_proxy() -> str:
     import socket
 
-    port = _get_textproxy_port()
+    port = get_textproxy_port()
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
             return f"running :{port}"

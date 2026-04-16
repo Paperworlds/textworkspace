@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-_TEXTPROXY_DEFAULT_PORT = 9880
+from textworkspace.config import get_textproxy_port
+
 _FISH_FUNCTIONS_DIR = Path.home() / ".config" / "fish" / "functions"
 
 _PYPI_TOOLS = ("textaccounts", "textsessions")
@@ -299,7 +300,7 @@ def run_doctor_checks() -> list[CheckResult]:
         pass
 
     # --- Proxy check ---
-    proxy_port = _get_textproxy_port()
+    proxy_port = get_textproxy_port()
     if _is_port_responding(proxy_port):
         results.append(CheckResult(label="proxy", detail=f":{proxy_port} responding", status="ok"))
     else:
@@ -338,15 +339,6 @@ def run_doctor_checks() -> list[CheckResult]:
         ))
 
     return results
-
-
-def _get_textproxy_port() -> int:
-    config_path = Path.home() / ".config" / "textproxy" / "config.json"
-    try:
-        data = json.loads(config_path.read_text())
-        return int(data["port"])
-    except Exception:  # noqa: BLE001
-        return _TEXTPROXY_DEFAULT_PORT
 
 
 def _is_port_responding(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
