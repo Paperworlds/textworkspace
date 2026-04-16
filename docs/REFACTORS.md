@@ -28,9 +28,9 @@ Apply these when starting a refactor on any repo.
 - The CLI exposes it as `--version` / `-V` with a git hash suffix per CONVENTIONS.md:
   ```python
   try:
-      _git_hash = _sp.check_output(
+      _git_hash = subprocess.check_output(
           ["git", "rev-parse", "--short", "HEAD"],
-          stderr=_sp.DEVNULL, text=True,
+          stderr=subprocess.DEVNULL, text=True,
           cwd=Path(__file__).parent,
       ).strip()
       _version_str = f"{__version__} ({_git_hash})"
