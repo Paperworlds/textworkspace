@@ -1,0 +1,248 @@
+id: "011"
+title: "tw repo move — orchestrated path update when a repo folder moves"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 2.00
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE  (remove once specced — answers informed the design below)
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "How does Claude Code encode project paths as directory names under ~/.claude/projects/?"
+      answer: "Absolute path with every '/' replaced by '-'. Leading '/' becomes leading '-'. E.g. /Users/foo/bar → -Users-foo-bar. Confirmed by inspecting ~/.claude/projects/ on the dev machine."
+
+    - id: U02
+      question: "Does tw sync exist yet, and what does it do?"
+      answer: "tw sync is planned but not yet implemented. repo move must skip it gracefully if missing."
+
+    - id: U03
+      question: "How do installed tools expose their bin_path for subprocess calls?"
+      answer: "detect_installed_tools() in doctor.py returns dict[str, ToolInfo] where ToolInfo.bin_path is the full path to the binary. Already used in doctor checks."
+
+  findings: |
+    Tool exit code convention for unsupported subcommands varies. Using exit 2 as
+    the signal for "subcommand not supported" is our convention — tools that don't
+    implement `repo move` should exit 2. tw repo move treats exit 2 as a silent skip,
+    any other non-zero as a warning.
+
+    click.confirm() aborts with SystemExit(1) when user says no (abort=True).
+    The "both paths exist" case is ambiguous — safest to abort and tell the user.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "tw repo move is called with a name not in config.yaml repos"
+    shall: "exit 1 with a message naming the unknown repo"
+
+  - id: R02
+    when: "the new path already exists on disk and the old path does not"
+    shall: "proceed with reference updates only — the folder was already moved"
+
+  - id: R03
+    when: "the old path exists and the new path does not"
+    shall: "prompt the user to confirm the physical move, then rename the directory if confirmed"
+
+  - id: R04
+    when: "both old and new paths exist on disk"
+    shall: "print a warning explaining the ambiguity and exit 1 without making changes"
+
+  - id: R05
+    when: "neither old nor new path exists on disk"
+    shall: "print a warning that the old path is missing, then proceed with reference updates"
+
+  - id: R06
+    when: "tw repo move completes the move decision"
+    shall: "update repos.<name>.path in ~/.config/paperworlds/config.yaml to the new resolved path"
+
+  - id: R07
+    when: "a ~/.claude/projects/<old-encoded>/ directory exists"
+    shall: "rename it to ~/.claude/projects/<new-encoded>/ to preserve Claude Code project state"
+
+  - id: R08
+    when: "no ~/.claude/projects/<old-encoded>/ directory exists"
+    shall: "print a notice that no Claude project dir was found and skip silently"
+
+  - id: R09
+    when: "an installed tool's repo move subcommand exits 0"
+    shall: "print the tool name and its MOVED output line"
+
+  - id: R10
+    when: "an installed tool's repo move subcommand exits 2"
+    shall: "skip that tool silently — exit 2 means the tool does not support the contract"
+
+  - id: R11
+    when: "an installed tool's repo move subcommand exits with any other non-zero code"
+    shall: "print [WARN] <tool>: <stderr> and continue with remaining tools"
+
+  - id: R12
+    when: "tw repo move completes all steps"
+    shall: "print a grep hint for hardcoded paths that could not be auto-updated"
+
+  - id: R13
+    when: "tw doctor is run and an installed tool's doctor subcommand outputs a STALE line"
+    shall: "add a CheckResult with status=warn, label=<tool>:<name>, and fix=tw repo move <name> <new-path>"
+
+  - id: R14
+    when: "an installed tool's doctor subcommand times out or is not found"
+    shall: "skip that tool silently — do not add a failure result"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    tw repo move is an orchestrator. It does not own textsessions or textprompts
+    configs — it calls each tool's own `repo move` subcommand. The folder move
+    itself is optional and user-confirmed. Claude Code project state is preserved
+    by renaming the ~/.claude/projects/ directory, which is keyed by encoded path.
+
+  modules:
+    - path: src/textworkspace/cli.py
+      role: "Add repo group + move subcommand. Add _encode_claude_project_path() helper."
+    - path: src/textworkspace/doctor.py
+      role: "Extend run_doctor_checks() to call each tool's doctor and parse STALE lines."
+    - path: tests/test_repo_move.py
+      role: "New test file covering all requirements."
+
+  data_structures:
+    _encode_claude_project_path:
+      signature: "_encode_claude_project_path(path: Path) -> str"
+      logic: "str(path).replace('/', '-')  # /Users/foo/bar → -Users-foo-bar"
+
+  sequence:
+    tw_repo_move: |
+      1. load_config() → check name in cfg.repos (R01)
+      2. resolve old_path and new_path
+      3. smart move detection:
+         a. new exists, old missing    → already moved, proceed (R02)
+         b. old exists, new missing    → click.confirm() then rename (R03)
+         c. both exist                 → abort with warning (R04)
+         d. neither exists             → warn, proceed (R05)
+      4. cfg.repos[name].path = str(new_path) + save_config(cfg)  (R06)
+      5. rename ~/.claude/projects/<old-enc>/ if it exists  (R07, R08)
+      6. for each tool in detect_installed_tools() with bin_path:
+           subprocess.run([bin, "repo", "move", name, new_path])
+           exit 0 → print MOVED line  (R09)
+           exit 2 → skip silently     (R10)
+           other  → print [WARN]      (R11)
+      7. print grep hint              (R12)
+
+    tw_doctor_stale: |
+      After existing checks in run_doctor_checks():
+      for tool_name, tool_info in detect_installed_tools().items():
+          if not tool_info.installed or not tool_info.bin_path: continue
+          try:
+              result = subprocess.run([bin, "doctor"], capture_output=True,
+                                      text=True, timeout=5)
+              for line in result.stdout.splitlines():
+                  if line.startswith("STALE "):
+                      _, repo_name, stale_path = line.split(maxsplit=2)
+                      results.append(CheckResult(
+                          label=f"{tool_name}:{repo_name}",
+                          detail=f"stale path: {stale_path}",
+                          status="warn",
+                          fix=f"tw repo move {repo_name} <new-path>",
+                      ))
+          except (FileNotFoundError, subprocess.TimeoutExpired):
+              pass  # R14: skip silently
+
+# ---------------------------------------------------------------------------
+# TASKS
+# status: LEAD only — agent must NOT modify this field
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T00
+    name: explore-claude-encoding
+    mode: explore
+    satisfies: []
+    status: done  # LEAD only — answered in explore: section above
+    checkpoint: true
+    do: |
+      Inspect ~/.claude/projects/ directory names and derive the encoding scheme.
+      Check if tw sync exists in cli.py. Check detect_installed_tools() return type.
+    check:
+      - "WHEN the progress log is read, THE SYSTEM SHALL contain the confirmed Claude path encoding scheme"
+
+  - id: T01
+    name: spec
+    mode: implement
+    satisfies: []
+    status: done  # LEAD only — this file is the spec
+    do: "Write prompts/011-repo-move.yaml using SPEC-TEMPLATE format."
+    check:
+      - "WHEN the file exists, THE SYSTEM SHALL contain requirements, design, and tasks sections"
+
+  - id: T02
+    name: doctor-stale-aggregation
+    mode: implement
+    satisfies: [R13, R14]
+    status: pending  # LEAD only
+    do: |
+      In doctor.py, extend run_doctor_checks() after the servers check (end of function,
+      before return results). Add the stale-path aggregation loop per design.sequence.
+      Import subprocess at top of file if not already present.
+    check:
+      - "WHEN a tool's doctor outputs 'STALE myrepo /old/path', THE SYSTEM SHALL add a warn CheckResult with label containing the tool name and repo name"
+      - "WHEN a tool's doctor times out, THE SYSTEM SHALL not add any CheckResult for that tool"
+
+  - id: T03
+    name: repo-move-command
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R12]
+    status: pending  # LEAD only
+    do: |
+      In cli.py, add before the existing `serve` command group:
+      - _encode_claude_project_path(path: Path) -> str helper function
+      - @main.group("repo") → repo_cmd
+      - @repo_cmd.command("move") with arguments name and new_path
+      Follow design.sequence.tw_repo_move exactly.
+      Use detect_installed_tools() from doctor module (already imported in dev commands).
+      Use click.confirm(..., abort=True) for the physical move prompt.
+    check:
+      - "WHEN name is unknown, THE SYSTEM SHALL exit 1 with an error message"
+      - "WHEN new path exists and old does not, THE SYSTEM SHALL skip physical move and update references"
+      - "WHEN old path exists and new does not and user confirms, THE SYSTEM SHALL rename the directory"
+      - "WHEN both paths exist, THE SYSTEM SHALL exit 1 with an ambiguity warning"
+      - "WHEN ~/.claude/projects/<old-encoded>/ exists, THE SYSTEM SHALL rename it to <new-encoded>/"
+
+  - id: T04
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R13, R14]
+    status: pending  # LEAD only
+    do: |
+      Create tests/test_repo_move.py:
+      - test_R01_unknown_name — name not in config → exit 1
+      - test_R02_already_moved — new exists, old missing → no rename, config updated
+      - test_R03_confirm_move — old exists, new missing, user confirms → dir renamed
+      - test_R03_deny_move — user says no → aborts, no changes
+      - test_R04_both_exist — both paths exist → exit 1, no changes
+      - test_R05_neither_exists — neither exists → warns, config updated
+      - test_R06_config_updated — config.yaml path field updated to new path
+      - test_R07_claude_project_renamed — fake ~/.claude/projects dir renamed correctly
+      - test_R08_no_claude_project — no old project dir → skips, prints notice
+      - test_R09_R10_R11_tool_calls — subprocess mock returning exit 0/2/1 respectively
+      - test_R13_doctor_stale_aggregation — tool doctor outputs STALE → CheckResult added
+      - test_R14_doctor_timeout — tool doctor times out → no CheckResult added
+      All tests: tmp_path + monkeypatch, no real ~/.claude or ~/.config writes.
+    check:
+      - "WHEN uv run pytest tests/test_repo_move.py -v is run, THE SYSTEM SHALL report all tests passing with zero failures"
+
+  - id: T05
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending  # LEAD only
+    do: "Commit all changes: 'feat: tw repo move + tw doctor stale-path aggregation'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: tw repo move commit"

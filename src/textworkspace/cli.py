@@ -1286,6 +1286,115 @@ def proxy_setup() -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw repo move <name> <new-path>
+# ---------------------------------------------------------------------------
+
+_CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+
+
+def _encode_claude_project_path(path: Path) -> str:
+    """Encode an absolute path as a Claude Code project directory name.
+
+    ~/.claude/projects/ dirs use the absolute path with every '/' replaced
+    by '-'. E.g. /Users/foo/bar → -Users-foo-bar.
+    """
+    return str(path).replace("/", "-")
+
+
+@main.group("repo", invoke_without_command=True)
+@click.pass_context
+def repo_cmd(ctx: click.Context) -> None:
+    """Manage repo references across the stack."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@repo_cmd.command("move")
+@click.argument("name")
+@click.argument("new_path")
+def repo_move(name: str, new_path: str) -> None:
+    """Update all references when a repo folder moves.
+
+    Detects whether the physical move has already happened and asks if not.
+    Updates config.yaml, ~/.claude/projects/, and each installed tool's config.
+    """
+    from textworkspace.config import load_config, save_config
+    from textworkspace.doctor import detect_installed_tools
+
+    cfg = load_config()
+
+    if name not in cfg.repos:
+        raise click.UsageError(f"repo '{name}' not found in config — run: tw config repos")
+
+    old_path = Path(cfg.repos[name].path).expanduser().resolve()
+    new_path_resolved = Path(new_path).expanduser().resolve()
+
+    if old_path == new_path_resolved:
+        click.echo("Old and new paths are the same — nothing to do.")
+        return
+
+    # --- Smart move detection ---
+    old_exists = old_path.exists()
+    new_exists = new_path_resolved.exists()
+
+    if new_exists and not old_exists:
+        click.echo(f"  folder: already at {new_path_resolved} (skipping physical move)")
+    elif old_exists and not new_exists:
+        click.confirm(
+            f"'{old_path}' still exists. Move it to '{new_path_resolved}'?",
+            abort=True,
+        )
+        old_path.rename(new_path_resolved)
+        click.echo(f"  folder: moved → {new_path_resolved}")
+    elif old_exists and new_exists:
+        raise click.UsageError(
+            f"Both '{old_path}' and '{new_path_resolved}' exist — ambiguous.\n"
+            f"Move or remove one manually, then re-run."
+        )
+    else:
+        click.echo(f"  [WARN] '{old_path}' not found on disk — updating references only")
+
+    # --- Update config.yaml ---
+    cfg.repos[name].path = str(new_path_resolved)
+    save_config(cfg)
+    click.echo(f"  config.yaml: {old_path} → {new_path_resolved}")
+
+    # --- Rename ~/.claude/projects/ dir ---
+    old_encoded = _encode_claude_project_path(old_path)
+    new_encoded = _encode_claude_project_path(new_path_resolved)
+    old_proj = _CLAUDE_PROJECTS_DIR / old_encoded
+    new_proj = _CLAUDE_PROJECTS_DIR / new_encoded
+    if old_proj.exists():
+        old_proj.rename(new_proj)
+        click.echo(f"  .claude/projects: {old_encoded} → {new_encoded}")
+    else:
+        click.echo(f"  .claude/projects: no project dir found for old path (skipped)")
+
+    # --- Call each installed tool's repo move ---
+    tools = detect_installed_tools()
+    for tool_name, tool_info in tools.items():
+        if not tool_info.installed or not tool_info.bin_path:
+            continue
+        result = subprocess.run(
+            [tool_info.bin_path, "repo", "move", name, str(new_path_resolved)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            moved_line = result.stdout.strip()
+            click.echo(f"  {tool_name}: {moved_line or 'ok'}")
+        elif result.returncode == 2:
+            pass  # tool does not support the contract — skip silently
+        else:
+            click.echo(f"  [WARN] {tool_name}: {result.stderr.strip()}", err=True)
+
+    # --- Warn about unresolvable references ---
+    click.echo(f"\nCheck for hardcoded paths that could not be auto-updated:")
+    click.echo(f"  grep -r '{old_path}' ~/.config/paperworlds/")
+
+
+# ---------------------------------------------------------------------------
 # tw serve [name] [--tag TAG]
 # ---------------------------------------------------------------------------
 

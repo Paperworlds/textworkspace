@@ -337,6 +337,31 @@ def run_doctor_checks() -> list[CheckResult]:
             label="servers", detail="textserve not installed", status="warn", fix="run: tw init",
         ))
 
+    # --- Tool stale-path checks (contract: tools output "STALE <name> <path>") ---
+    for tool_name, tool_info in tools.items():
+        if not tool_info.installed or not tool_info.bin_path:
+            continue
+        try:
+            result = subprocess.run(
+                [tool_info.bin_path, "doctor"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith("STALE "):
+                    parts = line.split(maxsplit=2)
+                    if len(parts) == 3:
+                        _, repo_name, stale_path = parts
+                        results.append(CheckResult(
+                            label=f"{tool_name}:{repo_name}",
+                            detail=f"stale path: {stale_path}",
+                            status="warn",
+                            fix=f"tw repo move {repo_name} <new-path>",
+                        ))
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
     return results
 
 
