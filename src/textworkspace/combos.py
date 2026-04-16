@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
+import shutil
 import socket
 import subprocess
 from datetime import date
@@ -179,14 +181,10 @@ def _is_proxy_running() -> bool:
 
 
 def _are_servers_running() -> bool:
-    import shutil
-
     binary = shutil.which("textserve")
     if binary is None:
         return False
     try:
-        import json as _json
-
         result = subprocess.run(
             [binary, "list", "--json"],
             capture_output=True,
@@ -195,7 +193,7 @@ def _are_servers_running() -> bool:
         )
         if result.returncode != 0:
             return False
-        servers = _json.loads(result.stdout) if result.stdout.strip() else []
+        servers = json.loads(result.stdout) if result.stdout.strip() else []
         if not isinstance(servers, list):
             servers = [servers]
         return any(s.get("status") == "running" for s in servers)
