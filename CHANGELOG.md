@@ -5,6 +5,32 @@ All notable changes to textworkspace are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.4.0
+
+Structured refactor pass — no behaviour changes.
+
+- `_TEXTPROXY_DEFAULT_PORT` and `_get_textproxy_port()` defined once in `config.py`, removed from `combos.py`, `doctor.py`, and `cli.py`
+- Inline stdlib imports (`json`, `re`, `socket`, `yaml`) moved to module level in `cli.py` and `combos.py`
+- `except Exception` in `_tool_version` narrowed to `(OSError, CalledProcessError, TimeoutExpired, ValueError)`
+- `__init__.py` fallback changed from hardcoded `"0.3.0"` to `"unknown"` per convention
+- `tests/conftest.py` added with shared `config_dir` fixture; 14 tests in `test_cli.py` updated to use it
+- REFACTORS.md code example updated: `_sp` alias → plain `subprocess`
+- Stale `test_version` assertion corrected from `0.2.3` to current version
+
+**Tests — 180 passing**
+
+| Area | Coverage | Notes |
+|---|---|---|
+| CLI commands | high | init, doctor, update, which, switch, sessions, stats, proxy, serve, status, combos, config, shell, dev, tools via CliRunner |
+| Config load/save | high | round-trip, validation, field omission, YAML format |
+| Combo engine | high | load, run, conditions, options, dry-run, install, export, update, search |
+| Binary bootstrap | high | platform detection, download, checksum, symlink management, version pruning |
+| Forums | medium | new/list/show/add/close/reopen, slug generation, file attachments |
+| Shell generation | medium | fish/bash/zsh wrapper output, `tw shell install` |
+| Not covered | — | live subprocesses (textproxy, textserve, textaccounts) — mocked throughout |
+
+---
+
 ## [v0.3.0] — 2026-04-15
 
 ### Added
