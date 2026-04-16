@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
-import json
 import shutil
 import socket
 import subprocess

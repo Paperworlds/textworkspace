@@ -16,7 +16,7 @@ _DEFAULT_DEFAULTS: dict = {"profile": "default", "proxy_autostart": False, "mode
 
 STATE_DIR = Path.home() / ".local" / "state" / "paperworlds"
 
-TEXTPROXY_DEFAULT_PORT = 9880
+_TEXTPROXY_DEFAULT_PORT = 9880
 _TEXTPROXY_CONFIG = Path.home() / ".config" / "textproxy" / "config.json"
 
 
@@ -24,8 +24,8 @@ def get_textproxy_port() -> int:
     try:
         data = json.loads(_TEXTPROXY_CONFIG.read_text())
         return int(data["port"])
-    except Exception:  # noqa: BLE001
-        return TEXTPROXY_DEFAULT_PORT
+    except (OSError, ValueError, TypeError):
+        return _TEXTPROXY_DEFAULT_PORT
 
 
 @dataclass
