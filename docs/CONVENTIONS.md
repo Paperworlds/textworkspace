@@ -408,6 +408,58 @@ MUST:
 | bash | `~/.local/share/bash-completion/completions/<tool>` | Requires `bash-completion` package |
 | zsh | `~/.zfunc/_<tool>` | Requires `fpath+=~/.zfunc` in `.zshrc` |
 
+## Path-tracking tools — CLI contract
+
+Any tool in the stack that tracks repo paths in its own config MUST expose
+two commands with the following contracts. This lets `tw` act as an
+orchestrator without owning each tool's config format.
+
+### `<tool> doctor`
+
+Checks its own config for stale paths (paths that no longer exist on disk).
+Prints one line per issue to stdout in machine-readable format:
+
+```
+STALE <name> <old-path>
+```
+
+Exits 0 if no issues, 1 if any stale paths found. `tw doctor` calls each
+registered tool's doctor and aggregates the results under that tool's name.
+
+### `<tool> repo move <name> <new-path>`
+
+Updates the named repo's path in the tool's own config. Must:
+
+1. Verify `<name>` exists in config — exit 1 with message if not
+2. Update the path entry to `<new-path>`
+3. Print one confirmation line: `MOVED <name> <old-path> → <new-path>`
+4. Exit 0 on success
+
+Does NOT run sync or touch other tools — that is `tw`'s responsibility.
+
+### Tools that must implement this contract
+
+| Tool | Config file | Status |
+|------|------------|--------|
+| textsessions | `~/.config/textsessions/config.toml` | planned |
+| textprompts | `~/.config/textprompts/config.toml` | planned (tool not yet built) |
+
+textworkspace itself also follows this contract for `~/.config/paperworlds/config.yaml`,
+and additionally handles `~/.claude/projects/` directory rename (its own domain).
+
+### `tw repo move <name> <new-path>` — orchestration
+
+`tw repo move` is the top-level command. It:
+
+1. Calls `<tool> repo move <name> <new-path>` for every registered tool that
+   supports the contract (detected via `tw doctor --list-tools`)
+2. Renames `~/.claude/projects/<old-encoded>/` → `<new-encoded>/` to preserve
+   Claude Code project state (MCP configs, memory, session links)
+3. Updates `~/.config/paperworlds/config.yaml` repos entry
+4. Runs `tw sync` to propagate the new path to all tool configs
+5. Warns about paths it cannot auto-update (hardcoded paths in prompt files,
+   textserve server configs) — prints a grep hint for manual review
+
 ## Adding a new repo to the stack
 
 1. Decide: Python package or Go binary
