@@ -1,0 +1,402 @@
+id: "012"
+title: "Repo import + smarter workspace add — CLI contract for project-tracking tools"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 2.00
+depends_on: ["010", "011"]
+
+# ---------------------------------------------------------------------------
+# CONTEXT (for the implementing agent)
+# ---------------------------------------------------------------------------
+#
+# Background the agent needs but isn't obvious from the requirements alone:
+#
+# - tw today has a repos: registry in ~/.config/paperworlds/config.yaml
+#   (label + path + profile), populated manually via config edit or the
+#   implicit add in prompt 011. Nothing imports from sibling tools.
+#
+# - textsessions already exposes a Python API that tw uses directly:
+#     from textsessions.sessions import STATE_DIR as _TS_STATE_DIR
+#   Sessions are stored as YAML in _TS_STATE_DIR/*.yaml. Each session is
+#   tied to a project path. Multiple sessions can share a path — dedup matters.
+#
+# - textaccounts.list_profiles() is already imported in tw cli.py and returns
+#   a list of profile name strings.
+#
+# - The CLI contract pattern for cross-tool communication is already
+#   established in docs/CONVENTIONS.md for doctor (STALE lines) and
+#   repo move (MOVED lines). This spec extends it with a new "repos" verb.
+#
+# - textprompts is under development by the same person — any convention
+#   written here will be followed when it ships. The convention must be
+#   strong and future-proof, not just expedient for textsessions.
+
+# ---------------------------------------------------------------------------
+# EXPLORE  (T00 must answer these before T01+)
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "What's the exact shape of textsessions state YAML files? What field holds the project path?"
+      answer: "[to be filled by T00 — read textsessions/src/textsessions/sessions.py and a real state file]"
+
+    - id: U02
+      question: "Does textaccounts.list_profiles() return list[str] or list[dict]? Confirm shape for pick-list code."
+      answer: "[to be filled by T00 — grep the textaccounts repo]"
+
+    - id: U03
+      question: "Are there textsessions entries without a project field (older or malformed)? How to handle them on import?"
+      answer: "[to be filled by T00 — inspect ~/.local/state/textsessions/*.yaml]"
+
+    - id: U04
+      question: "Does textsessions CLI use click? What's the pattern for adding a new subcommand like `textsessions repos`?"
+      answer: "[to be filled by T00 — read textsessions/src/textsessions/cli.py]"
+
+  findings: |
+    [T00 logs here: anything surprising the implementer should know,
+     e.g. session files with alternative field names, malformed entries,
+     edge cases in path resolution.]
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# EARS notation: WHEN [condition] THE SYSTEM SHALL [behavior]
+# ---------------------------------------------------------------------------
+
+requirements:
+  # --- CLI contract ---
+  - id: R01
+    when: "a project-tracking tool is invoked as `<tool> repos`"
+    shall: "print one `REPO <name> <path> [k=v ...]` line per known project, deduplicated by resolved path, and exit 0"
+
+  - id: R02
+    when: "a tool that does not track projects is invoked as `<tool> repos`"
+    shall: "exit with code 2 so orchestrators can skip it silently"
+
+  - id: R03
+    when: "the `<tool> repos` parser encounters unknown `k=v` pairs"
+    shall: "accept the line and ignore the unknown pairs — forward-compatible"
+
+  - id: R04
+    when: "the CONVENTIONS.md doc is opened"
+    shall: "contain a dedicated section naming the `<tool> repos` contract alongside the existing `doctor` and `repo move` contracts"
+
+  # --- textsessions upstream ---
+  - id: R05
+    when: "`textsessions repos` is run"
+    shall: "read all state YAML files, extract each session's project path, deduplicate by resolved path, and emit REPO lines"
+
+  - id: R06
+    when: "a textsessions entry has no project field or an empty project"
+    shall: "skip it silently without failing the command"
+
+  - id: R07
+    when: "a textsessions entry's project path does not exist on disk"
+    shall: "still emit the REPO line — existence is a doctor concern, not an import concern"
+
+  # --- tw repo import ---
+  - id: R08
+    when: "`tw repo import <tool>` is run against an installed tool"
+    shall: "invoke `<tool> repos`, parse REPO lines, and present an interactive review list before writing"
+
+  - id: R09
+    when: "a proposed import conflicts with an existing repo name in config.yaml"
+    shall: "prompt the user to keep existing / rename new / skip, not silently overwrite"
+
+  - id: R10
+    when: "two or more proposed imports resolve to the same path"
+    shall: "collapse them into one entry and prompt the user to pick the canonical name"
+
+  - id: R11
+    when: "`tw repo import --all` is run"
+    shall: "iterate every installed tool, call `<tool> repos` on each, and merge results into a single review list"
+
+  - id: R12
+    when: "the tool exits with code 2 during `tw repo import`"
+    shall: "skip it silently (no error, no warning)"
+
+  - id: R13
+    when: "the tool exits with a non-zero code other than 2 during `tw repo import`"
+    shall: "print a [WARN] naming the tool and exit code, then continue with remaining tools"
+
+  - id: R14
+    when: "an imported path does not exist on disk"
+    shall: "still import the entry and print a one-line [WARN] so `tw doctor` can surface it later"
+
+  # --- tw workspaces add enhancement ---
+  - id: R15
+    when: "`tw workspaces add` prompts for a profile"
+    shall: "offer a numbered pick-list of profiles from textaccounts.list_profiles() plus a free-text option"
+
+  - id: R16
+    when: "`tw workspaces add` prompts for a project"
+    shall: "offer a numbered pick-list of known repos from config.repos plus a free-text option"
+
+  - id: R17
+    when: "textaccounts is not installed"
+    shall: "fall back to a free-text prompt without aborting `tw workspaces add`"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Extends the existing CLI contract pattern (doctor, repo move) with a third
+    verb: `<tool> repos`. Each tool that knows about project paths exposes its
+    inventory in one stable text format. tw becomes a central importer without
+    needing to read any tool's internal state files.
+
+    Parallel to the contract, tw workspaces add gets real pick-lists — driven
+    by the same data sources (textaccounts for profiles, tw's own repos registry
+    for projects). The two features reinforce each other: import populates the
+    registry, add consumes it.
+
+  modules:
+    - path: docs/CONVENTIONS.md  # NOTE: this is paperworlds/docs/, not textworkspace/docs/
+      role: "Add 'Project-tracking tools — CLI contract' section documenting `<tool> repos` format."
+
+    - path: textsessions/src/textsessions/cli.py
+      role: "Add `textsessions repos` subcommand that prints REPO lines from state YAMLs."
+
+    - path: src/textworkspace/repo_import.py
+      role: "New module. Parser for REPO lines + orchestration for `tw repo import`."
+
+    - path: src/textworkspace/cli.py
+      role: "Add `tw repo import <tool>` and `tw repo import --all`. Enhance `workspaces_add` pick-lists."
+
+  line_format: |
+    REPO <name> <path> [key=value ...]
+
+    - <name>: no spaces, no '=' — suggested identifier; tw treats it as editable
+    - <path>: absolute path (tilde-expanded by tool before printing). Spaces forbidden for v1 — quote later if needed.
+    - [key=value ...]: optional metadata pairs. Parsers MUST ignore unknown keys.
+    - Reserved keys for future use: profile=, tags=, description=
+    - Parser strategy: shlex.split if whitespace handling ever needs quoting; for v1 str.split() is enough.
+
+  parser:
+    signature: "_parse_repo_line(line: str) -> tuple[str, Path, dict[str, str]] | None"
+    behavior: |
+      - Returns None for lines not starting with 'REPO ' (ignore blanks, comments, stray output).
+      - Splits on whitespace. First token after REPO = name, second = path, rest = k=v pairs.
+      - Resolves path with Path(p).expanduser(). Does NOT call .resolve() (would fail if path missing).
+      - Returns (name, path, metadata_dict). Caller handles dedup by path.
+
+  tw_repo_import_flow: |
+    1. Determine target tools:
+       - If --all: iterate detect_installed_tools() (reuse from doctor.py)
+       - Else: the single tool named in args — error if not installed
+    2. For each tool:
+       a. subprocess.run([bin, "repos"], capture_output=True, timeout=10)
+       b. If exit 2: skip silently (R12)
+       c. If exit != 0 and != 2: [WARN] and continue (R13)
+       d. Parse stdout lines with _parse_repo_line
+    3. Merge results:
+       - Deduplicate by expanduser'd path string (R10)
+       - Collect conflicts (same path, different names → prompt)
+       - Collect conflicts (same name exists in cfg.repos with different path → prompt R09)
+    4. Present review list:
+       ```
+       Found 5 repos from textsessions:
+         [1] data-work       ~/projects/data-work
+         [2] textworkspace   ~/projects/personal/paperworlds/textworkspace  (exists as 'tw')
+         [3] ...
+       ```
+    5. For each conflict, prompt:
+       - [k]eep existing / [r]ename new / [s]kip
+       - Default: keep existing (safest)
+    6. Write cfg.repos and save_config().
+    7. Final summary: "Imported N new, skipped M, renamed K."
+
+  workspace_add_pick_list: |
+    Utility: _prompt_pick_list(items: list[str], prompt: str, allow_freetext: bool = True) -> str
+      - Prints numbered list
+      - User enters number OR free-text value (if allow_freetext)
+      - Returns chosen string
+      - Empty list → degrades to plain click.prompt (free-text only)
+
+    Applied to:
+      - profile: items = list_profiles() if _HAS_TEXTACCOUNTS else []
+      - project: items = [r.path for r in cfg.repos.values()]  # show name+path in display, return path
+
+  textsessions_repos_impl: |
+    def repos(ctx):
+        seen = {}  # path → (name, metadata)
+        for f in _TS_STATE_DIR.glob("*.yaml"):
+            if f.name.startswith("_"):
+                continue
+            with f.open() as fh:
+                data = yaml.safe_load(fh) or {}
+            for sid, info in data.items():
+                if not isinstance(info, dict):
+                    continue
+                project = info.get("project") or info.get("project_path") or ""
+                if not project:
+                    continue  # R06
+                resolved = str(Path(project).expanduser())
+                if resolved in seen:
+                    continue  # R05 dedup
+                name = Path(resolved).name or sid  # dir basename, fallback to session id
+                seen[resolved] = (name, {})
+        for path, (name, meta) in seen.items():
+            extra = " " + " ".join(f"{k}={v}" for k, v in meta.items()) if meta else ""
+            click.echo(f"REPO {name} {path}{extra}")
+
+  conventions_md_addition: |
+    Under a new heading "Project-tracking tools — CLI contract":
+
+    ```
+    Tools that associate work with a project or repo path MUST expose:
+
+    - `<tool> repos` → prints `REPO <name> <path> [k=v ...]` lines
+      - One line per known project, deduplicated by resolved path
+      - Exit code 0 = success (even if no projects)
+      - Exit code 2 = tool does not track projects (orchestrators skip silently)
+
+    Reserved metadata keys for future use: profile, tags, description.
+    Parsers ignore unknown keys — keys can be added without breaking consumers.
+
+    Consumers: `tw repo import <tool>` and `tw repo import --all`.
+
+    | Tool          | repos supported | notes                      |
+    |---------------|-----------------|----------------------------|
+    | textsessions  | yes             | reads state/*.yaml         |
+    | textprompts   | planned         | same contract when built   |
+    ```
+
+# ---------------------------------------------------------------------------
+# TASKS
+# status is LEAD-only — agent must not touch it.
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T00
+    name: explore-tool-internals
+    mode: explore
+    satisfies: []
+    status: pending  # LEAD only
+    checkpoint: true
+    do: |
+      Answer U01-U04. Read:
+      - textsessions/src/textsessions/sessions.py — state YAML shape, field names
+      - textsessions/src/textsessions/cli.py — existing click command patterns
+      - textaccounts repo — list_profiles() return type
+      - A real ~/.local/state/textsessions/*.yaml file — sanity check shape
+      Fill in explore.findings with anything surprising.
+      No code yet.
+    check:
+      - "WHEN the explore section is read, THE SYSTEM SHALL have concrete answers (not '[to be filled]') for U01-U04"
+
+  - id: T01
+    name: conventions-doc
+    mode: implement
+    satisfies: [R04]
+    status: pending  # LEAD only
+    do: |
+      Edit paperworlds/docs/CONVENTIONS.md:
+      - Add the 'Project-tracking tools — CLI contract' section per design.conventions_md_addition
+      - Place it after the existing 'Path-tracking tools' section for symmetry
+      - Include the tool table with textsessions (yes) and textprompts (planned)
+    check:
+      - "WHEN CONVENTIONS.md is grepped for 'Project-tracking tools', THE SYSTEM SHALL find the new section"
+      - "WHEN the section is read, THE SYSTEM SHALL contain the REPO line format spec and the exit code contract"
+
+  - id: T02
+    name: textsessions-repos-cmd
+    mode: implement
+    satisfies: [R05, R06, R07]
+    status: pending  # LEAD only
+    do: |
+      In textsessions/src/textsessions/cli.py add a `repos` click subcommand.
+      Implementation per design.textsessions_repos_impl. Keep it minimal:
+      read state YAML files, extract project paths, dedup, emit REPO lines.
+      Add tests in textsessions/tests/ verifying:
+      - emits REPO line per unique project path
+      - skips entries with no project (R06)
+      - still emits line when path does not exist on disk (R07)
+    check:
+      - "WHEN `textsessions repos` is run against a state dir with 3 unique projects, THE SYSTEM SHALL emit 3 REPO lines"
+      - "WHEN a session entry has no project field, THE SYSTEM SHALL NOT emit a line for it"
+      - "WHEN uv run pytest is run in textsessions, THE SYSTEM SHALL report all tests passing"
+
+  - id: T03
+    name: tw-repo-import
+    mode: implement
+    satisfies: [R01, R02, R03, R08, R09, R10, R11, R12, R13, R14]
+    status: pending  # LEAD only
+    do: |
+      Create src/textworkspace/repo_import.py:
+      - _parse_repo_line() per design.parser
+      - import_from_tool(bin_path: str, tool_name: str) -> list[ImportedRepo]
+      - import_from_all(tools: dict) -> list[ImportedRepo]
+      - resolve_conflicts(imports, existing_repos) → interactive prompts
+      - apply_imports(cfg, chosen) → mutate and save_config
+
+      In src/textworkspace/cli.py:
+      - Add @repo_cmd.command("import") taking [tool] positional + --all flag
+      - Wire to repo_import.py orchestrator
+      - Print summary line at the end
+
+      Reuse detect_installed_tools() from doctor.py for --all.
+    check:
+      - "WHEN tw repo import textsessions is run, THE SYSTEM SHALL invoke `textsessions repos` as a subprocess"
+      - "WHEN two imports resolve to the same path, THE SYSTEM SHALL show one merged entry and prompt for canonical name"
+      - "WHEN an imported name matches an existing repo, THE SYSTEM SHALL prompt keep/rename/skip"
+      - "WHEN the tool exits with code 2, THE SYSTEM SHALL skip it silently"
+
+  - id: T04
+    name: workspaces-add-pick-lists
+    mode: implement
+    satisfies: [R15, R16, R17]
+    status: pending  # LEAD only
+    do: |
+      In src/textworkspace/cli.py — workspaces_add:
+      - Replace free-text 'Profile' prompt with a numbered pick-list seeded
+        by textaccounts.list_profiles() (when _HAS_TEXTACCOUNTS), otherwise
+        fall back to the current free-text prompt (R17).
+      - Replace free-text 'Project path' prompt with a numbered pick-list
+        seeded by cfg.repos (show name + path, return path). Always allow
+        free-text entry as a final 'other' option.
+      - Extract _prompt_pick_list(items, prompt, allow_freetext=True) as a
+        small helper, either in cli.py or a new utils module.
+    check:
+      - "WHEN tw workspaces add runs with textaccounts installed and profiles configured, THE SYSTEM SHALL show a numbered profile list"
+      - "WHEN tw workspaces add runs and repos are configured, THE SYSTEM SHALL show a numbered repo list"
+      - "WHEN the user types a number matching an option, THE SYSTEM SHALL accept that option"
+      - "WHEN the user types free-text instead of a number, THE SYSTEM SHALL accept it as the answer"
+
+  - id: T05
+    name: tests
+    mode: implement
+    satisfies: [R01, R03, R08, R09, R10, R12, R13, R14, R15, R16, R17]
+    status: pending  # LEAD only
+    do: |
+      In textworkspace/tests/test_repo_import.py:
+      - _parse_repo_line: valid lines, unknown keys ignored, malformed returns None
+      - import flow: mock subprocess.run to return REPO lines, verify parsed
+      - conflict handling: same-name conflict (keep/rename/skip), same-path dedup
+      - exit 2 silent skip; non-zero non-2 prints WARN
+      - missing path on disk still imports + warns
+
+      In textworkspace/tests/test_cli.py or test_workspace.py:
+      - workspaces_add: CliRunner with input simulating picks
+      - profile pick-list: choosing a number resolves to that profile
+      - project pick-list: choosing a number resolves to that path
+      - textaccounts unavailable → degrades to free-text
+    check:
+      - "WHEN uv run pytest is run in textworkspace, THE SYSTEM SHALL report all tests passing with zero failures"
+
+  - id: T06
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending  # LEAD only
+    do: |
+      Commit in two logical units:
+      1. In textsessions: "feat: add `textsessions repos` CLI contract"
+      2. In textworkspace: "feat: tw repo import + pick-lists for tw workspaces add"
+      3. In paperworlds: "docs: document project-tracking tools CLI contract"
+      Push all three repos.
+    check:
+      - "WHEN git log is inspected in each repo, THE SYSTEM SHALL show the matching commit on main"
