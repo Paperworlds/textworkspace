@@ -48,6 +48,10 @@ requirements:
     when: "tw start <name> is run with a valid workspace"
     shall: "execute profile switch, then server start, then session open — in that order, each step conditional on the next"
 
+  - id: R02b
+    when: "tw start <name> <session-name> is run with an optional second argument"
+    shall: "pass <session-name> to textsessions new --name, overriding default_session_name from the workspace config"
+
   - id: R03
     when: "a workspace config has both tags and names set under servers"
     shall: "raise ValueError at load time with a message naming the offending workspace"
@@ -284,7 +288,7 @@ tasks:
     status: pending  # LEAD only
     do: |
       Add to cli.py following existing click patterns:
-      - tw start <workspace>: calls WorkspaceManager(cfg).start(name)
+      - "tw start <workspace> [session-name]: calls WorkspaceManager(cfg).start(name, session_name=session_name)"
       - tw stop <workspace>: calls WorkspaceManager(cfg).stop(name)
       - tw workspaces group with subcommands:
           list   → WorkspaceManager.list() formatted table
