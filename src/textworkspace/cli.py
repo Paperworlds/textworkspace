@@ -2049,6 +2049,146 @@ def tools_install(name: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw start / tw stop — workspace lifecycle
+# ---------------------------------------------------------------------------
+
+
+@main.command("start")
+@click.argument("workspace")
+@click.argument("session_name", required=False, default=None)
+def workspace_start(workspace: str, session_name: str | None) -> None:
+    """Start a workspace — profile switch, server start, session open.
+
+    \b
+    tw start data                      — start with default session name
+    tw start data reporting-orderbook  — start with a custom session name
+    """
+    from textworkspace.workspace import WorkspaceManager
+
+    cfg = load_config()
+    WorkspaceManager(cfg).start(workspace, session_name=session_name)
+
+
+@main.command("stop")
+@click.argument("workspace")
+def workspace_stop(workspace: str) -> None:
+    """Stop a workspace's servers and clear active state.
+
+    Does not revert the active profile.
+    """
+    from textworkspace.workspace import WorkspaceManager
+
+    cfg = load_config()
+    WorkspaceManager(cfg).stop(workspace)
+
+
+# ---------------------------------------------------------------------------
+# tw workspaces group
+# ---------------------------------------------------------------------------
+
+
+@main.group("workspaces", invoke_without_command=True)
+@click.pass_context
+def workspaces_cmd(ctx: click.Context) -> None:
+    """Manage workspace profiles.
+
+    \b
+    tw workspaces list    — list all workspaces
+    tw workspaces status  — show active workspace
+    tw workspaces add     — add a workspace interactively
+    tw workspaces edit    — open config.yaml in $EDITOR
+    """
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@workspaces_cmd.command("list")
+def workspaces_list() -> None:
+    """List all configured workspaces."""
+    from textworkspace.workspace import WorkspaceManager
+
+    cfg = load_config()
+    items = WorkspaceManager(cfg).list()
+    if not items:
+        click.echo("No workspaces configured. Use `tw workspaces add` to create one.")
+        return
+
+    name_w = max(len(w.name) for w in items)
+    desc_w = max((len(w.description) for w in items), default=0)
+    prof_w = max(len(w.profile) for w in items)
+
+    for ws in items:
+        if ws.servers.tags:
+            srv = f"tags: {', '.join(ws.servers.tags)}"
+        elif ws.servers.names:
+            srv = f"names: {', '.join(ws.servers.names)}"
+        else:
+            srv = "(no servers)"
+        click.echo(
+            f"  {ws.name:<{name_w}}  {ws.description:<{desc_w}}  {ws.profile:<{prof_w}}  {srv}"
+        )
+
+
+@workspaces_cmd.command("status")
+def workspaces_status() -> None:
+    """Show the currently active workspace."""
+    from textworkspace.workspace import WorkspaceManager
+
+    cfg = load_config()
+    state = WorkspaceManager(cfg).status()
+    if state is None:
+        click.echo("No active workspace.")
+        return
+    click.echo(f"  active:     {state.get('active_workspace', '?')}")
+    click.echo(f"  started_at: {state.get('started_at', '?')}")
+
+
+@workspaces_cmd.command("add")
+def workspaces_add() -> None:
+    """Add a new workspace interactively."""
+    from textworkspace.config import ServersConfig, WorkspaceConfig
+
+    cfg = load_config()
+
+    name = click.prompt("Workspace name (e.g. data)")
+    if name in cfg.workspaces:
+        click.echo(f"warning: workspace '{name}' already exists — it will be overwritten")
+    description = click.prompt("Description", default="")
+    profile = click.prompt("Profile (textaccounts profile name)")
+    project = click.prompt("Project path (optional)", default="")
+    default_session_name = click.prompt("Default session name (optional)", default="")
+
+    srv_type = click.prompt("Servers by (tags/names/none)", default="none")
+    servers = ServersConfig()
+    if srv_type == "tags":
+        raw = click.prompt("Tag(s), comma-separated")
+        servers = ServersConfig(tags=[t.strip() for t in raw.split(",") if t.strip()])
+    elif srv_type == "names":
+        raw = click.prompt("Server name(s), comma-separated")
+        servers = ServersConfig(names=[n.strip() for n in raw.split(",") if n.strip()])
+
+    ws = WorkspaceConfig(
+        name=name,
+        profile=profile,
+        servers=servers,
+        description=description,
+        project=project,
+        default_session_name=default_session_name,
+    )
+    cfg.workspaces[name] = ws
+    save_config(cfg)
+    click.echo(f"workspace '{name}' added — run: tw start {name}")
+
+
+@workspaces_cmd.command("edit")
+def workspaces_edit() -> None:
+    """Open config.yaml in $EDITOR."""
+    load_config()
+    editor = os.environ.get("EDITOR", "vi")
+    subprocess.run([editor, str(CONFIG_FILE)], check=False)
+
+
+# ---------------------------------------------------------------------------
 # forums sub-group
 # ---------------------------------------------------------------------------
 

@@ -66,6 +66,22 @@ class ThirdPartyEntry:
 
 
 @dataclass
+class ServersConfig:
+    tags: list[str] = field(default_factory=list)
+    names: list[str] = field(default_factory=list)
+
+
+@dataclass
+class WorkspaceConfig:
+    name: str
+    profile: str
+    servers: ServersConfig = field(default_factory=ServersConfig)
+    description: str = ""
+    project: str = ""
+    default_session_name: str = ""
+
+
+@dataclass
 class Config:
     repos: dict[str, RepoEntry] = field(default_factory=dict)
     dirs: SharedDirs = field(default_factory=SharedDirs)
@@ -73,6 +89,7 @@ class Config:
     defaults: dict = field(default_factory=lambda: {"profile": "default", "proxy_autostart": False, "mode": "user"})
     forums: dict = field(default_factory=dict)
     third_party: dict[str, ThirdPartyEntry] = field(default_factory=dict)
+    workspaces: dict[str, "WorkspaceConfig"] = field(default_factory=dict)
 
 
 def _parse_repo(data: dict) -> RepoEntry:
@@ -152,6 +169,42 @@ def _third_party_to_dict(e: ThirdPartyEntry) -> dict:
     return d
 
 
+def _parse_workspace(ws_name: str, data: dict) -> WorkspaceConfig:
+    profile = data.get("profile", "")
+    if not profile:
+        raise ValueError(f"workspace '{ws_name}': profile is required")
+    raw_servers = data.get("servers") or {}
+    tags = list(raw_servers.get("tags") or [])
+    names = list(raw_servers.get("names") or [])
+    if tags and names:
+        raise ValueError(
+            f"workspace '{ws_name}': servers.tags and servers.names are mutually exclusive"
+        )
+    return WorkspaceConfig(
+        name=ws_name,
+        profile=profile,
+        servers=ServersConfig(tags=tags, names=names),
+        description=data.get("description", ""),
+        project=data.get("project", ""),
+        default_session_name=data.get("default_session_name", ""),
+    )
+
+
+def _workspace_to_dict(ws: WorkspaceConfig) -> dict:
+    d: dict = {"profile": ws.profile}
+    if ws.description:
+        d["description"] = ws.description
+    if ws.servers.tags:
+        d["servers"] = {"tags": ws.servers.tags}
+    elif ws.servers.names:
+        d["servers"] = {"names": ws.servers.names}
+    if ws.project:
+        d["project"] = ws.project
+    if ws.default_session_name:
+        d["default_session_name"] = ws.default_session_name
+    return d
+
+
 def _config_to_dict(cfg: Config) -> dict:
     data: dict = {}
     if cfg.repos:
@@ -163,6 +216,8 @@ def _config_to_dict(cfg: Config) -> dict:
         data["forums"] = cfg.forums
     if cfg.third_party:
         data["third_party"] = {name: _third_party_to_dict(e) for name, e in cfg.third_party.items()}
+    if cfg.workspaces:
+        data["workspaces"] = {name: _workspace_to_dict(ws) for name, ws in cfg.workspaces.items()}
     return data
 
 
@@ -188,7 +243,11 @@ def load_config() -> Config:
         name: _parse_third_party(v or {})
         for name, v in (raw.get("third_party") or {}).items()
     }
-    return Config(repos=repos, dirs=dirs, tools=tools, defaults=defaults, forums=forums, third_party=third_party)
+    workspaces = {
+        ws_name: _parse_workspace(ws_name, v or {})
+        for ws_name, v in (raw.get("workspaces") or {}).items()
+    }
+    return Config(repos=repos, dirs=dirs, tools=tools, defaults=defaults, forums=forums, third_party=third_party, workspaces=workspaces)
 
 
 def save_config(cfg: Config) -> None:
