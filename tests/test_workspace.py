@@ -204,6 +204,24 @@ def test_start_passes_session_name(tmp_path, cfg, monkeypatch):
     assert any("reporting-orderbook-bug" in " ".join(a) for a in ts_args)
 
 
+def test_start_profile_override(tmp_path, cfg, monkeypatch):
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._HAS_TEXTACCOUNTS", True)
+
+    called_with: list[str] = []
+    monkeypatch.setattr(
+        "textworkspace.workspace._ta_env_for_profile",
+        lambda p: called_with.append(p) or {"CLAUDE_CONFIG_DIR": "/tmp/other"},
+    )
+    monkeypatch.setattr("textworkspace.workspace.subprocess.run", lambda *a, **k: MagicMock(returncode=0))
+    monkeypatch.setattr("textworkspace.workspace.shutil.which", lambda x: f"/usr/bin/{x}")
+
+    WorkspaceManager(cfg).start("data", profile="personal")
+
+    assert called_with == ["personal"], "should use override profile, not workspace default"
+
+
 def test_start_default_session_name_used(tmp_path, cfg, monkeypatch):
     sf = tmp_path / "state.yaml"
     monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)

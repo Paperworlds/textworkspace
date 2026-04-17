@@ -79,16 +79,23 @@ class WorkspaceManager:
     def __init__(self, cfg) -> None:
         self._cfg = cfg
 
-    def start(self, name: str, session_name: Optional[str] = None) -> None:
+    def start(
+        self,
+        name: str,
+        session_name: Optional[str] = None,
+        profile: Optional[str] = None,
+    ) -> None:
         ws = self._cfg.workspaces.get(name)
         if ws is None:
             raise click.UsageError(f"workspace '{name}' not found — run: tw workspaces list")
+
+        active_profile = profile or ws.profile
 
         # Step 1: Resolve profile dir for CLAUDE_CONFIG_DIR injection
         profile_dir: Optional[str] = None
         if _HAS_TEXTACCOUNTS:
             try:
-                env_vars = _ta_env_for_profile(ws.profile)
+                env_vars = _ta_env_for_profile(active_profile)
                 raw = env_vars.get("CLAUDE_CONFIG_DIR")
                 if raw:
                     profile_dir = str(raw)

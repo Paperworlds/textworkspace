@@ -2056,17 +2056,19 @@ def tools_install(name: str | None) -> None:
 @main.command("start")
 @click.argument("workspace")
 @click.argument("session_name", required=False, default=None)
-def workspace_start(workspace: str, session_name: str | None) -> None:
+@click.option("--profile", default=None, help="Override the workspace's profile.")
+def workspace_start(workspace: str, session_name: str | None, profile: str | None) -> None:
     """Start a workspace — profile switch, server start, session open.
 
     \b
-    tw start data                      — start with default session name
-    tw start data reporting-orderbook  — start with a custom session name
+    tw start data                           — start with default session name
+    tw start data reporting-orderbook-bug   — start with a custom session name
+    tw start data --profile personal        — override the workspace profile
     """
     from textworkspace.workspace import WorkspaceManager
 
     cfg = load_config()
-    WorkspaceManager(cfg).start(workspace, session_name=session_name)
+    WorkspaceManager(cfg).start(workspace, session_name=session_name, profile=profile)
 
 
 @main.command("stop")
