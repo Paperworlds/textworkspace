@@ -56,6 +56,74 @@ brainstorm:
       pp-context-injection as the real enforcement layer. Post-task scan and
       dependency blocking are follow-ups once the pattern is validated.
 
+  - name: forums-showcase
+    title: Promote forum findings into the knowledge graph
+    priority: 2
+    status: brainstorm
+    date: "2026-04-17"
+    description: >
+      Forums capture messy, time-ordered discussion between sessions and humans.
+      Over weeks, patterns and resolved answers emerge — but they stay buried
+      inside thread files. Showcase is the promotion layer: curated findings
+      are marked as knowledge and exported to textmap as structured, citable
+      nodes. This closes the loop between discussion and canonical knowledge.
+    flywheel:
+      - stage: discuss
+        tool: textforums
+        description: Sessions and humans post threads, exchange context, resolve blockers.
+      - stage: showcase
+        tool: "textforums (showcase feature)"
+        description: >
+          A curator (human or agent) marks a thread — or a specific entry within
+          a thread — as worth graduating to knowledge.
+      - stage: know
+        tool: textmap
+        description: >
+          Showcased content becomes a node in the graph — queryable, tagged,
+          citable. Source thread linked as provenance. Feeds future session context.
+      - stage: discover
+        tool: "(agent sessions)"
+        description: >
+          Next session reads the map (read-on-start analogue), references the
+          knowledge, generates new discussion. Loop continues.
+    why: >
+      Without a promotion layer, lived experience stays buried in chronological
+      forum threads. The map only grows from explicit curation work, so agents
+      rediscover the same patterns over and over. Showcase makes the flywheel
+      close — forums become a source, not a dead letter office.
+    mechanics:
+      - An entry within a thread, or an entire thread, can carry `showcased: true`.
+      - "`textforums showcase list` — pinned view of all promoted threads."
+      - "`textforums promote <slug> [--entry N] [--summary ...]` — elevate to knowledge."
+      - "Promotion writes a node to textmap: summary + tags + source thread reference."
+      - "Demote is allowed — knowledge can be un-promoted if it turns out wrong or stale."
+      - "Promoted content keeps a backlink to the original thread for provenance."
+    curation_models:
+      - name: human
+        description: Curator (Paul) decides what graduates. Simplest, best to start.
+      - name: agent-assisted
+        description: >
+          An agent scans closed threads, proposes promotions with a draft summary.
+          Human confirms or rejects. Reduces curation friction without giving up control.
+      - name: automatic
+        description: >
+          Threads with `status=resolved` and a specific tag (e.g. `pattern`,
+          `decision`) auto-promote. Cheapest, but risks low-quality knowledge.
+    open_questions:
+      - How does textmap ingest promoted content — file drop, API call, or CLI command?
+      - Is a promoted summary editable in the map, or always derived from the source thread?
+      - One thread → one node, or can one node merge findings from multiple threads?
+      - Who writes the summary — the curator, or is it the thread's last entry?
+      - Versioning — if a thread gets a new entry post-promotion, does the node update?
+    relation_to_forums_agent_integration: >
+      `forums-agent-integration` handles data going IN (agents posting threads when
+      blocked). `forums-showcase` handles value coming OUT (findings becoming
+      durable knowledge). Both are needed for the flywheel to turn. This one
+      depends on textmap existing as a promotion target.
+    blockers:
+      - textmap must exist with a writable ingestion path.
+      - Decide on a canonical summary format (markdown node, YAML record, both).
+
 observability:
   - name: textctx
     title: Context window curator
