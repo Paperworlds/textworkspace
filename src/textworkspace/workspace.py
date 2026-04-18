@@ -61,13 +61,18 @@ def _run_tool(args: list[str], env: Optional[dict] = None, tool_name: str = "") 
         click.echo(f"[WARN] {label} failed ({e.returncode}) — skipping", err=True)
 
 
-def _mcpf_args(servers) -> list[str]:
-    if servers.tags:
-        args = []
-        for tag in servers.tags:
-            args += ["--tag", tag]
-        return args
-    return list(servers.names)
+def _textserve_bin() -> Optional[str]:
+    bin_path = shutil.which("textserve")
+    if bin_path:
+        return bin_path
+    try:
+        from textworkspace.bootstrap import BIN_DIR
+        candidate = BIN_DIR / "textserve"
+        if candidate.exists():
+            return str(candidate)
+    except ImportError:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -104,19 +109,21 @@ class WorkspaceManager:
         else:
             click.echo("[WARN] textaccounts not installed — skipping profile switch", err=True)
 
-        # Step 2: Build mcpf env with injected CLAUDE_CONFIG_DIR
-        mcpf_env = {**os.environ}
+        # Step 2: Build env with injected CLAUDE_CONFIG_DIR
+        server_env = {**os.environ}
         if profile_dir:
-            mcpf_env["CLAUDE_CONFIG_DIR"] = profile_dir
+            server_env["CLAUDE_CONFIG_DIR"] = profile_dir
 
         # Step 3: Start servers
         if ws.servers.tags or ws.servers.names:
-            mcpf_bin = shutil.which("mcpf")
-            if mcpf_bin is None:
-                click.echo("[WARN] mcpf not found — skipping server start", err=True)
+            ts_bin = _textserve_bin()
+            if ts_bin is None:
+                click.echo("[WARN] textserve not found — skipping server start", err=True)
             else:
-                extra = _mcpf_args(ws.servers)
-                _run_tool([mcpf_bin, "start"] + extra, env=mcpf_env, tool_name="mcpf")
+                for tag in ws.servers.tags:
+                    _run_tool([ts_bin, "start", "--tag", tag], env=server_env, tool_name="textserve")
+                for srv_name in ws.servers.names:
+                    _run_tool([ts_bin, "start", srv_name], env=server_env, tool_name="textserve")
 
         # Step 4: Open session
         ts_bin = shutil.which("textsessions")
@@ -151,12 +158,14 @@ class WorkspaceManager:
 
         # Stop servers (no profile env injection needed for stop)
         if ws.servers.tags or ws.servers.names:
-            mcpf_bin = shutil.which("mcpf")
-            if mcpf_bin is None:
-                click.echo("[WARN] mcpf not found — skipping server stop", err=True)
+            ts_bin = _textserve_bin()
+            if ts_bin is None:
+                click.echo("[WARN] textserve not found — skipping server stop", err=True)
             else:
-                extra = _mcpf_args(ws.servers)
-                _run_tool([mcpf_bin, "stop"] + extra, tool_name="mcpf")
+                for tag in ws.servers.tags:
+                    _run_tool([ts_bin, "stop", "--tag", tag], tool_name="textserve")
+                for srv_name in ws.servers.names:
+                    _run_tool([ts_bin, "stop", srv_name], tool_name="textserve")
 
         # Clear state — do NOT touch profile (R12)
         _write_state(active_workspace=None, started_at=None)

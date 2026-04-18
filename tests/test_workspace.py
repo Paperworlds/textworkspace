@@ -169,10 +169,10 @@ def test_start_happy_path_order(tmp_path, cfg, monkeypatch, capsys):
 
     WorkspaceManager(cfg).start("data")
 
-    # mcpf called before textsessions
-    assert call_order.index("mcpf") < call_order.index("textsessions")
+    # textserve called before textsessions
+    assert call_order.index("textserve") < call_order.index("textsessions")
 
-    # CLAUDE_CONFIG_DIR injected into mcpf env
+    # CLAUDE_CONFIG_DIR injected into textserve env
     assert any(e.get("CLAUDE_CONFIG_DIR") == "/tmp/profile/work" for e in captured_envs)
 
     # State written
@@ -264,20 +264,21 @@ def test_start_no_textaccounts_warns_continues(tmp_path, cfg, monkeypatch, capsy
     assert sf.exists()
 
 
-def test_start_no_mcpf_warns_continues(tmp_path, cfg, monkeypatch, capsys):
+def test_start_no_textserve_warns_continues(tmp_path, cfg, monkeypatch, capsys):
     sf = tmp_path / "state.yaml"
     monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
     monkeypatch.setattr("textworkspace.workspace._HAS_TEXTACCOUNTS", False)
     monkeypatch.setattr("textworkspace.workspace.subprocess.run", lambda *a, **k: MagicMock(returncode=0))
     monkeypatch.setattr(
         "textworkspace.workspace.shutil.which",
-        lambda x: None if x == "mcpf" else f"/usr/bin/{x}",
+        lambda x: None if x == "textserve" else f"/usr/bin/{x}",
     )
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: None)
 
     WorkspaceManager(cfg).start("data")
 
     err = capsys.readouterr().err
-    assert "mcpf not found" in err
+    assert "textserve not found" in err
     assert sf.exists()
 
 
