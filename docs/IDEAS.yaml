@@ -124,6 +124,66 @@ brainstorm:
       - textmap must exist with a writable ingestion path.
       - Decide on a canonical summary format (markdown node, YAML record, both).
 
+  - name: forums-textmap-native
+    title: Native dual-write — every forum operation also writes to the graph
+    priority: 1
+    status: brainstorm
+    date: "2026-04-18"
+    description: >
+      Stronger than showcase (opt-in promotion). Every textforums write is also
+      a textmap write — not as a side-effect or cron job, but as the primary
+      operation. The YAML file and the graph node are co-equal representations
+      of the same thing. forums-showcase becomes a higher-level view on top
+      of what's already in the graph.
+    model: >
+      textforums is the write surface (human-friendly, CLI). textmap is the
+      query surface (graph traversal, structural queries). Same data, two
+      projections. Neither is the "real" store — both are updated atomically.
+    operations:
+      new: >
+        textforums new → write thread.yaml AND upsert Thread node in graph
+        (slug, title, status=open, tags as edges, created_at).
+      add: >
+        textforums add → append to thread.yaml AND append Entry node linked
+        to Thread (author, content, status, timestamp).
+      close: >
+        textforums close → update thread.yaml status AND update Thread node
+        status=resolved, resolved_at. Graph queries can filter resolved threads.
+      reopen: >
+        textforums reopen → update both. Graph node status=open, resolved_at cleared.
+    graph_schema:
+      nodes:
+        Thread: [slug, title, status, tags, created_at, resolved_at]
+        Entry: [author, content, status_change, timestamp]
+      edges:
+        - Thread -[HAS_ENTRY]-> Entry
+        - Thread -[TAGGED]-> Tag
+        - Thread -[BLOCKS]-> Prompt   # for forums-as-dependency
+        - Thread -[CONCERNS]-> Repo   # derived from tags
+    query_power: >
+      With threads in the graph, you can ask: "what threads concern textserve
+      AND are open AND were created in the last 7 days?" as a graph traversal
+      rather than file-glob + YAML parse. Cross-repo blockers become first-class
+      edges. pp context injection becomes a graph query, not a tag filter.
+    relation_to_showcase: >
+      forums-showcase (promote selected threads to knowledge nodes) still makes
+      sense on top of this — it's the step where a Thread node gets promoted
+      to a KnowledgeNode with a curated summary. Native dual-write just means
+      ALL threads are in the graph from day one, not only promoted ones.
+    implementation_approach: >
+      textforums gets an optional textmap client (graphk CLI call or SDK).
+      If textmap is not installed/reachable, textforums degrades gracefully —
+      writes YAML, logs a warning, continues. No hard dependency.
+      textmap sync command can backfill from existing thread.yaml files.
+    open_questions:
+      - Atomic write or best-effort? If graph write fails, is the thread still created?
+      - Does textmap need a stable schema for Thread/Entry nodes before this lands?
+      - Backfill command — textmap sync --from-forums to ingest existing threads?
+      - Should textmap be the authority (YAML derived from graph) or co-equal?
+    blockers:
+      - textmap must have a stable Node schema and writable CLI interface.
+      - graphk CLI (or equivalent) must be on PATH or the integration is no-op.
+
 observability:
   - name: textctx
     title: Context window curator
