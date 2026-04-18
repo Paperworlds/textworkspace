@@ -15,8 +15,10 @@ from textworkspace.config import get_textproxy_port
 
 _FISH_FUNCTIONS_DIR = Path.home() / ".config" / "fish" / "functions"
 
-_PYPI_TOOLS = ("textaccounts", "textsessions")
+_PYPI_TOOLS = ("textaccounts", "textsessions", "textread")
 _GO_TOOLS = ("textproxy", "textserve")
+
+_TEXTREAD_CONFIG = Path.home() / ".config" / "paperworlds" / "textread.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +338,32 @@ def run_doctor_checks() -> list[CheckResult]:
         results.append(CheckResult(
             label="servers", detail="textserve not installed", status="warn", fix="run: tw init",
         ))
+
+    # --- textread checks ---
+    tr_info = tools.get("textread")
+    if tr_info and tr_info.installed:
+        if not _TEXTREAD_CONFIG.exists():
+            results.append(CheckResult(
+                label="textread:config",
+                detail="no config file — defaults in use",
+                status="info",
+            ))
+        else:
+            try:
+                import yaml as _yaml
+                tr_cfg = _yaml.safe_load(_TEXTREAD_CONFIG.read_text()) or {}
+            except Exception:
+                tr_cfg = {}
+            backend = tr_cfg.get("agent_backend", "sdk")
+            if backend == "sdk":
+                import os as _os
+                if not _os.environ.get("ANTHROPIC_API_KEY"):
+                    results.append(CheckResult(
+                        label="textread:api-key",
+                        detail="ANTHROPIC_API_KEY not set (agent_backend=sdk)",
+                        status="warn",
+                        fix="export ANTHROPIC_API_KEY=sk-ant-...",
+                    ))
 
     # --- Tool stale-path checks (contract: tools output "STALE <name> <path>") ---
     for tool_name, tool_info in tools.items():
