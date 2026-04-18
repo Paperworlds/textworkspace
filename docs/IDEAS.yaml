@@ -262,6 +262,9 @@ developer_workflow:
         stays predictable and the main session's context window isn't polluted
         by page contents. The subagent gets: URL + fetched content + stored
         user context + output schema. It returns a structured verdict.
+      synchronous: >
+        Sync only. No async, no background jobs — keep it simple. If the fetch
+        is slow, the CLI blocks. Acceptable trade-off at v1.
       model:
         default: haiku
         override: "--model <alias>  (e.g. sonnet for long-form PDFs or nuanced takes)"
@@ -269,12 +272,50 @@ developer_workflow:
           No multi-provider abstraction at v1; keep the surface small.
       cost_target: A typical read should be cents, not dollars. Haiku default
         keeps it cheap enough to run opportunistically on every shared link.
+    storage_model:
+      approach: >
+        Two-tier: raw content on disk as the durable archive, YAML mapping as
+        the structured interpretation. Raw is fetched ONCE per URL. Mapping
+        can be regenerated cheaply by re-running the agent against cached raw
+        with updated context — no re-fetch needed.
+      cache_root: >
+        Home-space, path configurable via config (default ~/.textread/cache/).
+        Config key lives under textread in ~/.config/paperworlds/config.yaml
+        or a dedicated ~/.config/paperworlds/textread.yaml.
+      layout: |
+        ~/.textread/cache/<slug-or-hash>/
+          raw.<ext>        # content as fetched (html, pdf, txt...)
+          raw.meta.json    # url, fetched_at, content-type, final-url, status
+          mapping.yaml     # structured verdict + extract — the smart part
+      re_mapping: >
+        "textread remap <url>" re-runs the agent on cached raw with the
+        current context. Useful when projects or interests change — you can
+        re-evaluate old reads without spending new fetch budget.
+      feeds_textmap: >
+        Future integration. textmap doesn't exist yet, so v1 ships without
+        it — mappings stay local. Once textmap lands, mapping.yaml becomes
+        the bridge: promoted reads (or ones crossing a relevance threshold)
+        become nodes in the graph. Raw stays local — textmap gets the
+        interpretation, not the archive. Designed with the bridge in mind
+        so the shape of mapping.yaml is textmap-compatible from day one.
+    fetch_strategy:
+      principles:
+        - Respect robots.txt — never fetch blocked paths.
+        - Identify with a proper User-Agent.
+        - Fetch once per URL (until explicit refresh).
+      library: newspaper
+      library_url: https://github.com/AndyTheFactory/newspaper4k
+      note: >
+        newspaper4k is the maintained community fork of newspaper3k — worth
+        watching (no stable commitment yet). Start with it; if it proves
+        flaky, fall back to readability-lxml or a manual
+        urllib.robotparser + httpx combo.
     open_questions:
-      - Sync vs async — some sources are slow (PDFs, long transcripts, YouTube).
-      - Cache policy — same URL should be free on re-read; invalidate on what signal?
-      - Output shape — terse verdict by default, optional deep summary on flag.
-      - Fetch strategy — raw HTML to markdown is enough, or do we need a real extraction library?
+      - Output shape — terse verdict by default, optional deep summary on flag?
+      - Cache invalidation — does anything auto-expire, or only manual refresh?
+      - Slug vs hash for cache key — human-readable is nicer but collisions hurt.
       - Subagent invocation path — Claude Code Agent SDK, or plain Anthropic SDK call? SDK call is simpler and cheaper.
+      - PDFs, YouTube transcripts, paywalled content — scope for v1 or later?
 
   - name: texthook
     title: Git hooks integration
