@@ -224,6 +224,58 @@ spec_format:
       prompts/010-workspace-profiles.yaml for a worked example.
 
 developer_workflow:
+  - name: textread
+    title: Context-aware link reader
+    priority: 1
+    status: idea
+    date: "2026-04-18"
+    description: >
+      CLI that takes a URL (article, PDF, video transcript, repo README),
+      fetches it, and evaluates relevance against a stored user context
+      ("I am a developer working on Paperworlds — a text-based multiplayer
+      RPG plus AI dev tooling stack"). Output: a worth-reading verdict plus
+      a summary through the lens of what YOU are building. Separate repo,
+      small scope, useful on day one.
+    why: >
+      The volume of AI/dev news is overwhelming; most articles are noise
+      relative to what you're actually shipping. A reader that knows your
+      current projects can filter the feed and surface only what connects
+      to real work. Cheaper attention, faster validation loops.
+    usage:
+      - "textread <url> — fetch, assess, summarize through saved context."
+      - "textread <url> --context <override> — one-off context override."
+      - "textread context edit — update the stored user profile / project list."
+      - "textread <url> --save — append to a reading log or IDEAS.yaml if relevant."
+    context_model:
+      stored_at: ~/.config/paperworlds/read-context.yaml
+      contents:
+        - Who you are (role, stack, interests).
+        - Projects you're working on (names, goals, current blockers).
+        - Filters (topics to downweight or ignore).
+    integration_ideas:
+      - Feeds IDEAS.yaml — high-relevance articles auto-suggest a references entry under the matching project.
+      - Pair with Arc folder exports for batch evaluation of a reading list.
+      - Exposed as a Claude Code slash-command or subagent for interactive reads.
+    execution_model:
+      runtime: >
+        Each read runs as a fresh subagent invocation (clean context) so cost
+        stays predictable and the main session's context window isn't polluted
+        by page contents. The subagent gets: URL + fetched content + stored
+        user context + output schema. It returns a structured verdict.
+      model:
+        default: haiku
+        override: "--model <alias>  (e.g. sonnet for long-form PDFs or nuanced takes)"
+        provider: Claude only for now — uses the Anthropic SDK / Claude API directly.
+          No multi-provider abstraction at v1; keep the surface small.
+      cost_target: A typical read should be cents, not dollars. Haiku default
+        keeps it cheap enough to run opportunistically on every shared link.
+    open_questions:
+      - Sync vs async — some sources are slow (PDFs, long transcripts, YouTube).
+      - Cache policy — same URL should be free on re-read; invalidate on what signal?
+      - Output shape — terse verdict by default, optional deep summary on flag.
+      - Fetch strategy — raw HTML to markdown is enough, or do we need a real extraction library?
+      - Subagent invocation path — Claude Code Agent SDK, or plain Anthropic SDK call? SDK call is simpler and cheaper.
+
   - name: texthook
     title: Git hooks integration
     priority: 3
