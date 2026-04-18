@@ -370,3 +370,137 @@ def test_status_returns_none_when_no_active(tmp_path, cfg, monkeypatch):
     monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
 
     assert WorkspaceManager(cfg).status() is None
+
+
+# ---------------------------------------------------------------------------
+# T04: textserve start/stop tests
+# ---------------------------------------------------------------------------
+
+
+def _make_cfg_names(**ws_kwargs):
+    """Workspace fixture with servers.names instead of tags."""
+    defaults = dict(
+        name="data",
+        profile="work",
+        servers=ServersConfig(names=["my-server"]),
+        description="",
+        project="",
+        default_session_name="",
+    )
+    defaults.update(ws_kwargs)
+    ws = WorkspaceConfig(**defaults)
+    from textworkspace.config import Config, SharedDirs
+    return Config(
+        repos={},
+        dirs=SharedDirs(state="", cache=""),
+        tools={},
+        defaults={},
+        workspaces={"data": ws},
+    )
+
+
+def test_r01_textserve_start_by_tag(tmp_path, monkeypatch):
+    cfg = _make_cfg(servers=ServersConfig(tags=["ai"]))
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._HAS_TEXTACCOUNTS", False)
+    monkeypatch.setattr("textworkspace.workspace.shutil.which", lambda x: None)
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: "/usr/bin/textserve")
+
+    calls = []
+    monkeypatch.setattr(
+        "textworkspace.workspace.subprocess.run",
+        lambda args, **kw: calls.append(args) or MagicMock(returncode=0),
+    )
+
+    WorkspaceManager(cfg).start("data")
+
+    textserve_calls = [c for c in calls if "textserve" in c[0]]
+    assert any(c == ["/usr/bin/textserve", "start", "--tag", "ai"] for c in textserve_calls)
+
+
+def test_r02_textserve_start_by_name(tmp_path, monkeypatch):
+    cfg = _make_cfg_names(servers=ServersConfig(names=["my-server"]))
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._HAS_TEXTACCOUNTS", False)
+    monkeypatch.setattr("textworkspace.workspace.shutil.which", lambda x: None)
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: "/usr/bin/textserve")
+
+    calls = []
+    monkeypatch.setattr(
+        "textworkspace.workspace.subprocess.run",
+        lambda args, **kw: calls.append(args) or MagicMock(returncode=0),
+    )
+
+    WorkspaceManager(cfg).start("data")
+
+    assert any(c == ["/usr/bin/textserve", "start", "my-server"] for c in calls)
+
+
+def test_r03_textserve_stop_by_tag(tmp_path, monkeypatch):
+    cfg = _make_cfg(servers=ServersConfig(tags=["ai"]))
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: "/usr/bin/textserve")
+
+    calls = []
+    monkeypatch.setattr(
+        "textworkspace.workspace.subprocess.run",
+        lambda args, **kw: calls.append(args) or MagicMock(returncode=0),
+    )
+
+    WorkspaceManager(cfg).stop("data")
+
+    assert any(c == ["/usr/bin/textserve", "stop", "--tag", "ai"] for c in calls)
+
+
+def test_r04_textserve_stop_by_name(tmp_path, monkeypatch):
+    cfg = _make_cfg_names(servers=ServersConfig(names=["my-server"]))
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: "/usr/bin/textserve")
+
+    calls = []
+    monkeypatch.setattr(
+        "textworkspace.workspace.subprocess.run",
+        lambda args, **kw: calls.append(args) or MagicMock(returncode=0),
+    )
+
+    WorkspaceManager(cfg).stop("data")
+
+    assert any(c == ["/usr/bin/textserve", "stop", "my-server"] for c in calls)
+
+
+def test_r05_textserve_missing_warns(tmp_path, cfg, monkeypatch, capsys):
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._HAS_TEXTACCOUNTS", False)
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: None)
+    monkeypatch.setattr(
+        "textworkspace.workspace.subprocess.run",
+        lambda *a, **k: MagicMock(returncode=0),
+    )
+
+    WorkspaceManager(cfg).start("data")
+
+    err = capsys.readouterr().err
+    assert "textserve not found" in err
+    assert sf.exists()  # state still written — start continues
+
+
+def test_r01_no_mcpf_calls(tmp_path, cfg, monkeypatch):
+    sf = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", sf)
+    monkeypatch.setattr("textworkspace.workspace._HAS_TEXTACCOUNTS", False)
+    monkeypatch.setattr("textworkspace.workspace._textserve_bin", lambda: "/usr/bin/textserve")
+
+    calls = []
+    monkeypatch.setattr(
+        "textworkspace.workspace.subprocess.run",
+        lambda args, **kw: calls.append(args) or MagicMock(returncode=0),
+    )
+
+    WorkspaceManager(cfg).start("data")
+
+    assert not any("mcpf" in str(c) for c in calls)

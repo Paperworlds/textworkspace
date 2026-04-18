@@ -1438,3 +1438,77 @@ def _yaml_load(path):
     import yaml as _y
     with open(path) as f:
         return _y.safe_load(f)
+
+
+# ---------------------------------------------------------------------------
+# T04: textread doctor tests
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_tools_with_textread(*, textread=True):
+    tools = _make_mock_tools()
+    tools["textread"] = ToolInfo(
+        name="textread",
+        installed=textread,
+        version="0.1.3" if textread else None,
+        source="pypi" if textread else None,
+        bin_path="/usr/bin/textread" if textread else None,
+    )
+    return tools
+
+
+def test_r08_textread_in_detect(tmp_path, monkeypatch):
+    """detect_installed_tools includes textread."""
+    import textworkspace.doctor as _doc
+    assert "textread" in _doc._PYPI_TOOLS
+
+
+def test_r11_api_key_warn(tmp_path, monkeypatch):
+    """tw doctor warns when ANTHROPIC_API_KEY is missing and agent_backend=sdk."""
+    import yaml
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools_with_textread(textread=True))
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: False)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+    monkeypatch.setattr(_doc, "_TEXTREAD_CONFIG", tmp_path / "textread.yaml")
+
+    # Write a config with agent_backend=sdk (default)
+    cfg_data = {"default_model": "haiku", "agent_backend": "sdk"}
+    (tmp_path / "textread.yaml").write_text(yaml.dump(cfg_data))
+
+    # Remove ANTHROPIC_API_KEY from env
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    results = _doc.run_doctor_checks()
+    labels = {r.label for r in results}
+    assert "textread:api-key" in labels
+    warn = next(r for r in results if r.label == "textread:api-key")
+    assert warn.status == "warn"
+
+
+def test_r12_config_missing_info(tmp_path, monkeypatch):
+    """tw doctor emits info when textread.yaml is missing."""
+    import textworkspace.doctor as _doc
+
+    monkeypatch.setattr(_doc, "detect_installed_tools", lambda: _make_mock_tools_with_textread(textread=True))
+    monkeypatch.setattr(_doc, "_is_port_responding", lambda port, **kw: False)
+    monkeypatch.setattr(_doc, "_FISH_FUNCTIONS_DIR", tmp_path)
+    # Point to a non-existent config file
+    monkeypatch.setattr(_doc, "_TEXTREAD_CONFIG", tmp_path / "textread.yaml")
+
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", tmp_path / "config.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_FILE", tmp_path / "combos.yaml")
+    monkeypatch.setattr("textworkspace.combos.COMBOS_DIR", tmp_path / "combos.d")
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+    results = _doc.run_doctor_checks()
+    labels = {r.label for r in results}
+    assert "textread:config" in labels
+    info = next(r for r in results if r.label == "textread:config")
+    assert info.status == "info"
