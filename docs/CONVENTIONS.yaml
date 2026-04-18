@@ -431,3 +431,48 @@ testing:
       - tw go requires textserve for servers step — use --no-servers to skip
       - tw up/down/reset depend on proxy and servers subcommands
       - Combo conditions (proxy.running) require respective tools installed
+
+# ---------------------------------------------------------------------------
+# CLAUDE SESSION CONVENTIONS
+# ---------------------------------------------------------------------------
+
+claude_sessions:
+  context_management:
+    principles:
+      - One topic per chat. New topic = new conversation. Dead context accumulates and degrades output.
+      - "Every 20-30 messages (or when focus drifts), summarize key decisions, start fresh."
+      - "Trigger is drift, not message count — a focused 50-message chat beats a scattered 15-message one."
+      - "Use Projects for reference material that spans multiple chats — upload once, reference everywhere."
+      - "Missing context causes worse output than extra context. When in doubt, include the file."
+
+  prompt_craft:
+    principles:
+      - Batch related tasks in one message instead of sequential sends.
+      - "Be specific about scope when correcting: 'Only rewrite section 3. Keep everything else.'"
+      - "Constrain output shape — 'bulleted list', 'respond in YAML', 'one paragraph max'. Shape constraints are often more impactful than prompt refinement."
+      - "Use Edit on your original message when you made an error, rather than stacking corrections."
+
+  file_handling:
+    principles:
+      - "PDFs are token-expensive. Extract to markdown before uploading when you control the source."
+      - "Only include files this specific task needs — but err on the side of including vs omitting."
+      - "This is exactly what textread's three-tier storage solves: raw binary → raw.md → mapping.yaml."
+
+  model_selection:
+    principles:
+      - "Sonnet handles the majority of tasks. Reserve Opus for complex reasoning."
+      - "In Claude Code specifically: Opus makes better architectural decisions and fewer retry loops on multi-file edits."
+      - "Haiku for high-volume, low-stakes reads (textread default) — cents not dollars."
+    paperworlds_defaults:
+      interactive_sessions: opus
+      pp_prompts_default: haiku
+      pp_prompts_complex: sonnet
+      textread: haiku
+      reviews_and_planning: opus
+
+  session_hygiene:
+    principles:
+      - "Keep a prompt library for recurring tasks. Same structure, swap the variable."
+      - "This is what tw actions (YAML playbooks) and pp prompts provide at different scales."
+      - "Set Personal Preferences once (tone, format, style) — persists across conversations."
+      - "For agent sessions: CLAUDE.md + read-on-start conventions replace manual context dumps."

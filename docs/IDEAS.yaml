@@ -454,6 +454,21 @@ developer_workflow:
         v1: polling (mirrors existing pp daemon approach, zero extra deps).
         Later: watchdog / kqueue (macOS FSEvents) as optional backend for
         lower latency and no CPU spin on idle. Toggle via config.
+    migration_coupling_points: >
+      The three places in paperagents/daemon.py that couple the loop to pp-specific
+      concepts — extract these as pluggable callbacks and the loop becomes textwatch's
+      generic core:
+      coupling:
+        - _build_watchers: knows about pipeline.yaml and discover_features — becomes
+            a registered callback that returns (name, state_dir, slug_map) tuples.
+        - notify_tick: tied to Fire() hook system — becomes a configurable action
+            handler (notify, run, log) driven by rule schema.
+        - discovery_tick: imports load_config / discover_features — becomes a
+            discovery callback registered by pp's rule set, not baked into the core.
+      result: >
+        run_daemon_loop() + PID/lock/double-fork infrastructure → textwatch core.
+        pp daemon becomes one YAML rule-set file that registers these three callbacks.
+
     pp_builtin_rules: >
       textwatch ships with a built-in pp rule set that replicates current
       paperagents daemon behavior: watch registered_paths for *.state changes
