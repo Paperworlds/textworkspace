@@ -1,0 +1,315 @@
+# ---------------------------------------------------------------------------
+# 013 — textserve + textread integration
+# ---------------------------------------------------------------------------
+
+id: "013"
+title: "textserve + textread integration into textworkspace"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 3.00
+depends_on: ["010"]
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: |
+        Does textserve have a Justfile or Makefile with an 'install' recipe?
+        Check /Users/projects/personal/paperworlds/textserve/ for build files.
+        If no Justfile exists, what is the correct build/install command (go install, go build, etc.)?
+      answer: ""
+
+    - id: U02
+      question: |
+        When workspace config has multiple tags (servers.tags = ["work", "ai"]),
+        should tw start call `textserve start --tag work && textserve start --tag ai`
+        (two calls), or is there a multi-tag flag? Inspect textserve start --help output
+        and newStartCmd() in cmd/textserve/main.go to confirm.
+      answer: ""
+
+    - id: U03
+      question: |
+        What does `textread --help` print for the top-level group?
+        Specifically: is the binary name `textread` with subcommand `read`,
+        or does `textread <url>` work directly (no subcommand)?
+        Run `textread --help` and `textread read --help` if available.
+      answer: ""
+
+    - id: U04
+      question: |
+        Does textread expose a `textread context show` output that tw doctor
+        could check (e.g. context file path, current role)? Or is context
+        entirely internal? Check textread/src/textread/context.py and cli.py.
+      answer: ""
+
+  findings: |
+    [T00 logs here]
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+
+  # --- textserve: workspace start/stop ---
+  - id: R01
+    when: "`tw start <workspace>` is run and the workspace has servers.tags entries"
+    shall: "call `textserve start --tag <tag>` once per tag entry, in order, using the textserve binary (not mcpf)"
+    note: "Separate calls per tag — textserve --tag flag takes one value at a time (verify in T00/U02)"
+
+  - id: R02
+    when: "`tw start <workspace>` is run and the workspace has servers.names entries"
+    shall: "call `textserve start <name>` once per name entry, in order"
+
+  - id: R03
+    when: "`tw stop <workspace>` is run and the workspace has servers.tags entries"
+    shall: "call `textserve stop --tag <tag>` once per tag entry, in order"
+
+  - id: R04
+    when: "`tw stop <workspace>` is run and the workspace has servers.names entries"
+    shall: "call `textserve stop <name>` once per name entry, in order"
+
+  - id: R05
+    when: "the textserve binary is not found during tw start or tw stop"
+    shall: "print `[WARN] textserve not found — skipping server start/stop` to stderr and continue without aborting"
+
+  # --- textserve: dev install ---
+  - id: R06
+    when: "`tw dev on` or `tw dev install` is run in developer mode"
+    shall: "build textserve from the local repo at dev_root/textserve using the discovered build command (just install, or go install ./...), and record source='dev' in config"
+
+  - id: R07
+    when: "`tw dev off` is run"
+    shall: "skip textserve (it is a Go binary with no PyPI equivalent) and print `textserve: skipped (Go binary — use tw update textserve to reinstall from GitHub)`"
+
+  # --- textread: detection ---
+  - id: R08
+    when: "`detect_installed_tools()` is called"
+    shall: "include textread in the result, detected as a Python tool via importlib and PATH"
+
+  # --- textread: tw init ---
+  - id: R09
+    when: "`tw init` reaches the textread init step and textread is installed"
+    shall: "display the current config knobs (default_model, agent_backend, default_profile) and offer to set default_profile from the list of known textaccounts profiles if textaccounts is also installed"
+
+  - id: R10
+    when: "`tw init` reaches the textread init step and textread is not installed"
+    shall: "print `textread  not installed — install with: pip install textread` and skip"
+
+  # --- textread: doctor ---
+  - id: R11
+    when: "`tw doctor` is run and textread is installed with agent_backend='sdk'"
+    shall: "check that ANTHROPIC_API_KEY is set in the environment; if missing, emit a CheckResult with status='warn' and fix='export ANTHROPIC_API_KEY=...'"
+
+  - id: R12
+    when: "`tw doctor` is run and textread is installed"
+    shall: "check that ~/.config/paperworlds/textread.yaml exists; if missing, emit a CheckResult with status='info' and detail='no config file — defaults in use'"
+    note: "info not warn — missing config is valid (defaults are sane)"
+
+  # --- textread: shell ---
+  - id: R13
+    when: "`tw shell install` is run"
+    shall: "include textread in _INSTALLABLE_TOOLS so a fish wrapper function is generated for it"
+    note: "no short alias needed — 'textread' is already short enough"
+
+  # --- textread: dev install ---
+  - id: R14
+    when: "`tw dev on` or `tw dev install` is run in developer mode"
+    shall: "install textread as editable from dev_root/textread using `uv tool install -e <path> --force` and record source='dev'"
+
+  - id: R15
+    when: "`tw dev off` is run"
+    shall: "reinstall textread from PyPI using `uv tool install textread --force`"
+
+  # --- aliases ---
+  - id: R16
+    when: "`tw aliases` is run and textread is installed"
+    shall: "list textread with no short alias (none defined)"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Two tools, two integration tracks.
+
+    textserve (Go, already in _GO_TOOLS / doctor): replace hardcoded `mcpf`
+    in workspace.py with `textserve`. workspace.py calls start/stop once per
+    tag or name. Dev install adds textserve to _GO_TOOLS_DEV using the build
+    command confirmed by T00/U01.
+
+    textread (Python, currently absent): add to _PYPI_TOOLS in doctor.py,
+    wire into tw init, tw doctor, tw shell install, tw dev on/off/install,
+    and tw aliases. textread config lives at ~/.config/paperworlds/textread.yaml
+    with known fields: cache_root, default_model, context_path, agent_enabled,
+    agent_backend, default_profile.
+
+    No new config.yaml keys are needed for either tool — textserve manages its
+    own ~/.textserve/registry.yaml; textread manages its own textread.yaml.
+
+  modules:
+    - path: src/textworkspace/workspace.py
+      role: "Replace mcpf calls with textserve. _mcpf_args() → _textserve_calls() returning list[list[str]] (one inner list per subprocess call)."
+    - path: src/textworkspace/doctor.py
+      role: "Add textread to _PYPI_TOOLS. Add textread-specific checks (config file, ANTHROPIC_API_KEY)."
+    - path: src/textworkspace/cli.py
+      role: "Add _init_textread(). Add textread to _TOOL_ALIASES (no alias), _INSTALLABLE_TOOLS, _PYTHON_TOOLS, _PYTHON_TOOL_DEPS, _GO_TOOLS_DEV (textserve). Update dev off to skip textserve with a message."
+
+  sequence:
+    workspace_start_with_textserve: |
+      1. Resolve tags or names from ws.servers (same as before)
+      2. Find textserve binary: shutil.which("textserve") or BIN_DIR/textserve
+      3. If not found: warn + skip (R05)
+      4. For each tag in servers.tags: _run_tool([textserve_bin, "start", "--tag", tag], env=mcpf_env)
+         For each name in servers.names: _run_tool([textserve_bin, "start", name], env=mcpf_env)
+      5. (profile injection env stays unchanged — same CLAUDE_CONFIG_DIR pattern)
+
+    workspace_stop_with_textserve: |
+      1. Find textserve binary
+      2. If not found: warn + skip
+      3. For each tag in servers.tags: _run_tool([textserve_bin, "stop", "--tag", tag])
+         For each name in servers.names: _run_tool([textserve_bin, "stop", name])
+
+    init_textread: |
+      1. Detect textread from tools dict
+      2. If not installed: print install hint, return
+      3. Print "textread  (link reader)"
+      4. Try to load textread config (import textread.config; cfg = textread.config.load())
+      5. Print current knobs: default_model, agent_backend, default_profile
+      6. If textaccounts is installed and list_profiles() returns profiles:
+           Offer pick-list to set default_profile (same pattern as workspace add)
+      7. Offer to set default_model (haiku/sonnet/opus)
+      8. Save config if any changes made
+
+    doctor_textread: |
+      1. textread in tools and installed
+      2. Check ~/.config/paperworlds/textread.yaml exists → info if missing (R12)
+      3. If agent_backend == "sdk": check ANTHROPIC_API_KEY in os.environ → warn if missing (R11)
+      (Load config via subprocess to avoid import coupling: `textread context show --raw` or
+       read the YAML directly with yaml.safe_load — prefer direct read, simpler)
+
+  degradation:
+    principle: "Missing binary = warn + skip. Tool import errors are caught; never abort tw for a missing optional tool."
+    pattern: |
+      textserve_bin = shutil.which("textserve")
+      if textserve_bin is None:
+          bin_candidate = BIN_DIR / "textserve"
+          if bin_candidate.exists():
+              textserve_bin = str(bin_candidate)
+      if textserve_bin is None:
+          click.echo("[WARN] textserve not found — skipping server start", err=True)
+          return
+      for tag in ws.servers.tags:
+          _run_tool([textserve_bin, "start", "--tag", tag], env=env)
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+
+  - id: T00
+    name: explore-build-and-cli-details
+    mode: explore
+    satisfies: []
+    status: pending  # LEAD only
+    checkpoint: true
+    do: |
+      Answer U01-U04 by reading:
+      - ls /Users/projects/personal/paperworlds/textserve/ (Justfile? Makefile? go.mod?)
+      - cat textserve/cmd/textserve/main.go newStartCmd() — confirm --tag takes one value
+      - textread --help and textread read --help (run in textread venv or via uv run)
+      - textread/src/textread/context.py context_group
+      Fill in answer: fields in explore.unknowns above. Log findings to progress log.
+      Do not write any code.
+    check:
+      - "WHEN the progress log is read, THE SYSTEM SHALL contain a clear answer for U01, U02, U03, U04"
+
+  - id: T01
+    name: workspace-textserve
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05]
+    status: pending  # LEAD only
+    do: |
+      In workspace.py:
+      1. Remove _mcpf_args() helper.
+      2. Add _textserve_bin() -> Optional[str]: checks shutil.which("textserve") then BIN_DIR/textserve.
+      3. In start(): replace mcpf block with textserve block per design.sequence.workspace_start_with_textserve.
+      4. In stop(): replace mcpf block with textserve block per design.sequence.workspace_stop_with_textserve.
+      Commit: "feat: workspace start/stop uses textserve instead of mcpf"
+    check:
+      - "WHEN workspace.py is read, THE SYSTEM SHALL contain no reference to 'mcpf'"
+      - "WHEN tw start is run with a workspace that has servers.tags=['ai'], THE SYSTEM SHALL invoke textserve start --tag ai"
+
+  - id: T02
+    name: textread-detection
+    mode: implement
+    satisfies: [R08, R11, R12]
+    status: pending  # LEAD only
+    do: |
+      In doctor.py:
+      1. Add "textread" to _PYPI_TOOLS tuple.
+      2. Add a textread-specific check block after the existing textserve check:
+         - Read ~/.config/paperworlds/textread.yaml with yaml.safe_load if it exists.
+         - If missing: append CheckResult(label="textread:config", detail="no config file — defaults in use", status="info").
+         - If agent_backend == "sdk" (or not set, default is sdk):
+             check os.environ.get("ANTHROPIC_API_KEY").
+             If missing: append CheckResult(label="textread:api-key", detail="ANTHROPIC_API_KEY not set", status="warn", fix="export ANTHROPIC_API_KEY=sk-ant-...").
+      Commit: "feat: textread detection and doctor checks"
+    check:
+      - "WHEN detect_installed_tools() is called, THE SYSTEM SHALL include a 'textread' key in the result"
+      - "WHEN tw doctor is run with ANTHROPIC_API_KEY unset and textread installed, THE SYSTEM SHALL emit a warn CheckResult"
+
+  - id: T03
+    name: textread-init-shell-dev
+    mode: implement
+    satisfies: [R09, R10, R13, R14, R15, R16]
+    status: pending  # LEAD only
+    do: |
+      In cli.py:
+      1. Add "textread" to _PYTHON_TOOLS (after textsessions, before textworkspace).
+      2. Add "textread": [] to _PYTHON_TOOL_DEPS.
+      3. Add "textread" to _TOOL_ALIASES with no aliases: "textread": [].
+      4. Add ("textread", "TEXTREAD", [], {}) to _INSTALLABLE_TOOLS.
+      5. In dev off loop: textread reinstall from PyPI is handled automatically by _PYTHON_TOOLS loop.
+         Add explicit skip+message for textserve: after the Go tools loop, if "textserve" not in
+         [t for t,_ in _GO_TOOLS_DEV]: print the skip message. Otherwise the _GO_TOOLS_DEV loop
+         already handles it — add ("textserve", "install") to _GO_TOOLS_DEV (T00/U01 confirms recipe).
+      6. Add _init_textread(cfg, tools) function per design.sequence.init_textread.
+         Call it from the tw init flow after _init_textserve.
+      Commit: "feat: textread + textserve wired into tw init, shell, dev install"
+    check:
+      - "WHEN tw dev install is run, THE SYSTEM SHALL attempt editable install of textread"
+      - "WHEN tw shell install is run, THE SYSTEM SHALL generate a fish function for textread"
+      - "WHEN tw init is run with textread installed, THE SYSTEM SHALL offer to configure default_profile"
+
+  - id: T04
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R08, R09, R11, R12, R14]
+    status: pending  # LEAD only
+    do: |
+      In tests/test_workspace.py — add or extend:
+      - test_r01_textserve_start_by_tag: monkeypatch _run_tool; verify called with ["textserve", "start", "--tag", "ai"]
+      - test_r02_textserve_start_by_name: verify called with ["textserve", "start", "my-server"]
+      - test_r03_textserve_stop_by_tag: verify stop path
+      - test_r04_textserve_stop_by_name: verify stop path
+      - test_r05_textserve_missing_warns: shutil.which returns None, BIN_DIR has no textserve;
+        verify [WARN] printed and no CalledProcessError raised
+      - test_r01_no_mcpf_calls: assert "mcpf" not in any subprocess call captured
+
+      In tests/test_doctor.py (new file or extend test_cli.py):
+      - test_r08_textread_in_detect: mock importlib; verify "textread" key present
+      - test_r11_api_key_warn: tmp_path config with agent_backend=sdk, no ANTHROPIC_API_KEY in env;
+        verify warn CheckResult emitted
+      - test_r12_config_missing_info: no textread.yaml; verify info CheckResult emitted
+
+      All tests: tmp_path fixtures, no real ~/.config writes, no network calls.
+      Commit: "test: textserve workspace + textread doctor coverage"
+    check:
+      - "WHEN pytest tests/ -v is run, THE SYSTEM SHALL report all tests passing with zero failures"
