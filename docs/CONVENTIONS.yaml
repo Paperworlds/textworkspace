@@ -1,0 +1,433 @@
+# Paperworlds — Cross-Repo Conventions
+# Single source of truth for API contracts, config paths, versioning,
+# shell conventions, developer workflow, refactoring rules, and testing.
+
+# ---------------------------------------------------------------------------
+# PUBLIC API SURFACE
+# ---------------------------------------------------------------------------
+
+public_api:
+  rules:
+    - Declare exports in __init__.py or a dedicated api.py module.
+    - Document the public API in the README under a ## API section.
+    - Never remove or rename a public function without a deprecation cycle.
+    - Never change a function signature in a breaking way. Use a new name instead.
+    - "Semver signals intent: patch = bugfix, minor = new features, major = removals."
+
+  deprecation_cycle: |
+    warnings.warn("X is deprecated, use Y", DeprecationWarning)
+    Keep the old name working for at least one minor version.
+    Update all in-tree consumers before removing.
+
+  current_exports:
+    textaccounts:
+      module: textaccounts.api
+      exports: [list_profiles, env_for_profile, active_profile, profile_dir, available]
+    textsessions:
+      module: textsessions.sessions
+      exports: [load_sessions, load_sessions_fast, filter_sessions, CACHE_PATH, STATE_DIR, Session]
+    textsessions_config:
+      module: textsessions.config
+      exports: [Config]
+    textproxy:
+      type: cli_only
+      commands: [textproxy stats, textproxy start/stop/restart, textproxy config --path]
+    textserve:
+      type: cli_only
+      commands: [textserve list, textserve start/stop]
+
+  go_tools: |
+    Go tools expose their API via CLI flags and stdout.
+    - Structured output via --json flag where supported (textserve).
+    - textproxy does NOT support --json on stats — parse human output or
+      read ~/.config/textproxy/config.json for port info.
+    - Config file locations are stable and can be read directly.
+
+# ---------------------------------------------------------------------------
+# CONFIG AND CACHE PATHS
+# ---------------------------------------------------------------------------
+
+paths:
+  stable:
+    - path: ~/.config/paperworlds/config.yaml
+      owner: textworkspace
+      format: YAML
+    - path: ~/.config/paperworlds/combos.yaml
+      owner: textworkspace
+      format: YAML
+    - path: ~/.config/textproxy/config.json
+      owner: textproxy
+      format: JSON
+    - path: ~/.local/state/claude-sessions/_cache.json
+      owner: textsessions
+      format: JSON array
+    - path: ~/.local/state/claude-sessions/*.yaml
+      owner: textsessions
+      format: YAML dict keyed by session ID
+    - path: ~/.textforums/<slug>/thread.yaml
+      owner: textforums
+      format: YAML (meta + entries list)
+
+  shared_config:
+    principle: opt-in, never required
+    note: |
+      Every tool must work standalone without textworkspace installed.
+      The shared config is a convenience layer, not a dependency.
+    owned_by: textworkspace
+    schema: |
+      repos:
+        mono:
+          path: /Users/projects/paradigm/mono
+          label: mono
+          profile: work
+        paperworlds:
+          path: /Users/projects/personal/paperworlds
+          label: paperworlds
+          profile: personal
+      dirs:
+        state: ~/.local/state/paperworlds
+        cache: ~/.cache/paperworlds
+
+    tool_integration: |
+      1. Without textworkspace: tool uses its own config exclusively.
+      2. With textworkspace: tw init or tw sync writes shared repos into
+         each tool's native config. Tools still read their own config.
+      3. Tools never import textworkspace. If a tool wants to read the
+         shared config as a hint, it reads the YAML file directly.
+
+    sync_direction: |
+      textworkspace config.yaml ──tw sync──▸ textsessions config.toml
+                                ──tw sync──▸ textprompts config.toml
+      textworkspace is the writer. Tools are readers of their own config.
+
+  tw_sync:
+    status: planned
+    behaviour: |
+      tw sync [--dry-run]
+      1. Read repos from paperworlds config.yaml
+      2. For each supported tool config: merge repos, match by path,
+         update existing, append new, never delete tool-specific repos.
+      3. Print diff of changes.
+    merge_rules:
+      - Match by path (canonical, no trailing slash)
+      - textworkspace values win for label and profile fields
+      - Repos only in tool config are left untouched
+      - Repos only in textworkspace config are appended
+      - Never delete repos from tool configs
+
+# ---------------------------------------------------------------------------
+# VERSIONING
+# ---------------------------------------------------------------------------
+
+versioning:
+  sources:
+    - tool: textaccounts
+      canonical: pyproject.toml
+      published_to: PyPI
+    - tool: textsessions
+      canonical: pyproject.toml
+      published_to: PyPI
+    - tool: textworkspace
+      canonical: pyproject.toml
+      published_to: PyPI (planned)
+    - tool: textproxy
+      canonical: Go ldflags at build time
+      published_to: GitHub Releases
+    - tool: textserve
+      canonical: Go ldflags at build time
+      published_to: GitHub Releases
+
+  version_string_format: "<tool>, version X.Y.Z (githash)"
+
+  python_pattern: |
+    # __init__.py — read from package metadata, never hardcode
+    from importlib.metadata import version, PackageNotFoundError
+    try:
+        __version__ = version("<package>")
+    except PackageNotFoundError:
+        __version__ = "unknown"
+
+    # cli.py — append git hash
+    import subprocess
+    try:
+        _git_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL, text=True,
+            cwd=Path(__file__).parent,
+        ).strip()
+        _version_str = f"{__version__} ({_git_hash})"
+    except Exception:
+        _version_str = __version__
+    @click.version_option(_version_str, "--version", "-V", prog_name="<tool>")
+
+  go_pattern: |
+    var Version = "dev"
+    var GitHash = ""
+    func VersionString() string {
+        if GitHash != "" { return Version + " (" + GitHash + ")" }
+        return Version
+    }
+    # Build: LDFLAGS = -X main.Version=$(VERSION) -X main.GitHash=$(shell git rev-parse --short HEAD)
+
+  tw_doctor: |
+    Python tools: run <tool> --version (preferred), fall back to importlib.
+    Go tools: check config tools.<name>.version, fall back to <tool> --version.
+
+  when_to_bump:
+    patch: Bug fixes, small features, doc/convention updates
+    minor: Meaningful new capability — new command, integration, module reorg
+    major: Breaking changes to config schema or public API
+    timing: After a logical batch of related changes, not after every commit.
+
+  changelog:
+    format: Keep a Changelog (keepachangelog.com)
+    rules:
+      - New ## vX.Y.Z section before previous version, no brackets, no date
+      - One bullet per change, what + why it matters. No implementation detail.
+      - Backtick command names. No filler.
+      - Update in the same commit as the version bump
+    test_table: |
+      **Tests — N passing, N skipped**
+      | Area | Coverage | Notes |
+      |---|---|---|
+      | CLI commands | high | ... |
+
+  tagging: |
+    1. Bump version in pyproject.toml
+    2. Update CHANGELOG.md
+    3. Commit: "chore: bump to vX.Y.Z"
+    4. git tag vX.Y.Z && git push && git push --tags
+
+# ---------------------------------------------------------------------------
+# SHELL CONVENTIONS
+# ---------------------------------------------------------------------------
+
+shell:
+  entry_points_vs_wrappers: |
+    Commands that only read/write files → pyproject [project.scripts] entry points.
+    Commands that modify shell state (eval, export, cd) → shell function wrapper.
+    Pattern: tool provides an install command that writes shell functions.
+    Example: textaccounts install generates ta.fish.
+
+  completions:
+    requirement: Every CLI tool MUST ship completions for fish, bash, and zsh.
+    python: |
+      _TEXTFORUMS_COMPLETE=fish_source textforums > ~/.config/fish/completions/textforums.fish
+      _TEXTFORUMS_COMPLETE=bash_source textforums > ~/.local/share/bash-completion/completions/textforums
+      _TEXTFORUMS_COMPLETE=zsh_source  textforums > ~/.zfunc/_textforums
+    go: "<tool> completion fish|bash|zsh"
+    install_command: |
+      The install subcommand MUST:
+      1. Detect current shell or accept --shell
+      2. Generate completions
+      3. Write to correct platform path
+      4. Handle aliases (ta, tw, ts)
+    paths:
+      fish: ~/.config/fish/completions/<tool>.fish
+      bash: ~/.local/share/bash-completion/completions/<tool>
+      zsh: ~/.zfunc/_<tool>
+
+# ---------------------------------------------------------------------------
+# PATH-TRACKING TOOLS — CLI CONTRACT
+# ---------------------------------------------------------------------------
+
+path_tracking:
+  description: |
+    Any tool that tracks repo paths in its own config MUST expose two commands.
+    This lets tw act as an orchestrator without owning each tool's config format.
+
+  doctor_command: |
+    <tool> doctor
+    Prints: STALE <name> <old-path>
+    Exits 0 if clean, 1 if stale paths found.
+
+  repo_move_command: |
+    <tool> repo move <name> <new-path>
+    1. Verify name exists — exit 1 if not
+    2. Update path in tool's config
+    3. Print: MOVED <name> <old-path> → <new-path>
+    4. Exit 0. Does NOT run sync.
+
+  tw_repo_move: |
+    tw repo move orchestrates:
+    1. Calls <tool> repo move for every registered tool
+    2. Renames ~/.claude/projects/<old-encoded>/ → <new-encoded>/
+    3. Updates ~/.config/paperworlds/config.yaml
+    4. Runs tw sync
+    5. Warns about hardcoded paths (prints grep hint)
+
+  tools:
+    - tool: textsessions
+      config: ~/.config/textsessions/config.toml
+      status: planned
+    - tool: textprompts
+      config: ~/.config/textprompts/config.toml
+      status: planned
+
+# ---------------------------------------------------------------------------
+# DEVELOPER WORKFLOW
+# ---------------------------------------------------------------------------
+
+developer_workflow:
+  install: |
+    Each tool: uv tool install -e . --force
+    Or via textworkspace: cd textworkspace && just install
+
+  version_sync: |
+    After pulling version bumps, reinstall:
+      cd <tool-repo> && uv tool install -e . --force
+    Editable installs (-e) mean code changes are immediate,
+    but version metadata is baked at install time.
+
+  tw_doctor: |
+    tw doctor runs <tool> --version to get actual installed version.
+    If doctor shows wrong version, reinstall the tool.
+
+  config_tools_section: |
+    The tools section in ~/.config/paperworlds/config.yaml records version
+    and source at tw init / tw update time. May go stale. Used by:
+    - tw update: check for newer versions (Go tools)
+    - doctor: fallback if binary --version fails
+    - combos: check tool requirements
+    Run tw init to refresh.
+
+  adding_new_repo: |
+    1. Decide: Python package or Go binary
+    2. Python: declare public API, add to exports table above
+    3. Go: document CLI flags and output format
+    4. Add to textworkspace: config model, doctor check, status line
+    5. Update this file
+
+# ---------------------------------------------------------------------------
+# REFACTORING RULES
+# ---------------------------------------------------------------------------
+
+refactoring:
+  process:
+    - Find duplicates first, fix one by one. Each duplicate gets its own commit.
+    - Then assess module structure and move things to better homes.
+    - Run /simplify last over the full result.
+    - One commit per logical change.
+
+  exception_handling:
+    - Never bare except Exception to swallow errors silently.
+    - "Catch specific: except (ValueError, subprocess.TimeoutExpired, FileNotFoundError)."
+    - "Converting between types: raise NewError(...) from None."
+    - "UI/TUI handlers: except Exception as e: notify(str(e)) is the one valid broad-catch."
+
+  magic_strings: |
+    Any string ID used across >1 method in the same class → class-level constant.
+    _PRIMARY_BTN = "save-btn", use in compose(), handlers, _submit().
+
+  shared_class_behaviour: |
+    Multiple UI classes with identical handlers → extract base class.
+    Template method: base wiring, subclasses implement _submit().
+    CSS type selectors match subclasses in Textual.
+
+  yaml_config_loading:
+    - Validate structure explicitly on load — don't trust keys exist.
+    - Check isinstance(entry, dict) before accessing keys.
+    - Check required keys present before using them.
+    - Raise ValueError naming the offending entry and missing key.
+
+  imports:
+    - Module-level only. No inline imports except truly optional/heavy deps.
+    - After moving a function, check for orphaned imports in the source file.
+
+  redundant_checks: |
+    Store existence check results in a variable. Don't call is_dir()/exists() twice.
+
+  extracting_to_shared_module:
+    - Private unless callers need it directly.
+    - Check for orphaned imports in every file you removed code from.
+    - Narrow exceptions at the new home.
+
+  e2e_checklist: |
+    After each refactor pass, write a short checklist listing CLI commands
+    that exercise the changed code paths. Group by risk area, add checkboxes.
+
+# ---------------------------------------------------------------------------
+# TESTING
+# ---------------------------------------------------------------------------
+
+testing:
+  principles:
+    - Regression tests mandatory for every bug fix.
+    - "Keep fixtures small. Tests must complete in milliseconds."
+    - Shared helpers in tests/conftest.py (fixtures or plain functions).
+    - pytest fixtures in conftest.py are auto-discovered; no import needed.
+    - One test function per requirement or behaviour.
+    - After refactor pass, include test confidence table in CHANGELOG.
+
+  e2e:
+    prerequisites: |
+      tw dev reinstall
+      tw shell install --fish
+      exec fish
+
+    shell_integration:
+      ta_switch: |
+        ta switch personal → ta status shows personal
+        ta switch work → ta status shows work
+      aliases: |
+        ta --version, ts --version, pp --version should match their tools
+      completions: |
+        tw <TAB>, ta <TAB>, ts <TAB> should show subcommands
+
+    doctor_and_status: |
+      tw doctor — all tools show version, source, health
+      tw status — profile, mode, combos count
+
+    combos: |
+      tw up — starts proxy + servers
+      tw down — stops everything
+      tw reset <profile> — switch + restart
+      tw go <profile> <repo> — full session launch
+
+    textforums:
+      unit_tests: |
+        just test-v -k forums              # all forums tests
+        just test-v -k "forums and slug"   # slug generation
+        just test-v -k "forums and cli"    # CLI commands
+      coverage:
+        - Slug generation (6 tests)
+        - YAML round-trip
+        - Data operations (add_entry, list_threads with filters)
+        - Resolution chain (get_root, get_author)
+        - All 7 CLI commands
+        - Integration (standalone + tw forums)
+      e2e_manual: |
+        # Basic operations
+        textforums new --title "test" --content "hello" --tag test
+        textforums list / list --status open / list --tag test
+        textforums show test-thread / show --raw
+        textforums add test-thread --content "reply" --status ack
+        tw forums list / tw forums show test-thread
+        textforums close test-thread --content "done"
+        textforums reopen test-thread
+      agent_coordination_flow: |
+        # Simulates pp injection scenario
+        export TEXTFORUMS_ROOT=$(mktemp -d)
+        textforums new --title "load_sessions renamed" --tag textsessions --tag blocker -c "..."
+        textforums list --tag textworkspace --status open  # should find it
+        textforums add <slug> --content "Updated imports" --author worker-003
+        textforums close <slug> -c "All consumers updated"
+        rm -rf $TEXTFORUMS_ROOT && unset TEXTFORUMS_ROOT
+      test_gaps:
+        - Tag round-trip (new --tag a --tag b → verify both)
+        - Combined filters (tag + status)
+        - Error paths (nonexistent slug)
+        - Duplicate slug handling
+        - Malformed YAML (corrupt thread.yaml → skip)
+        - Multi-entry ordering (10+ entries)
+        - pp injection query simulation
+
+    dev_workflow: |
+      tw dev reinstall — picks up local changes
+      tw doctor — version reflects local build
+      tw status — mode: developer
+
+    known_limitations:
+      - tw go requires textserve for servers step — use --no-servers to skip
+      - tw up/down/reset depend on proxy and servers subcommands
+      - Combo conditions (proxy.running) require respective tools installed
