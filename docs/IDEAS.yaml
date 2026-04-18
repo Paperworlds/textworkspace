@@ -242,10 +242,66 @@ developer_workflow:
       current projects can filter the feed and surface only what connects
       to real work. Cheaper attention, faster validation loops.
     usage:
-      - "textread <url> — fetch, assess, summarize through saved context."
-      - "textread <url> --context <override> — one-off context override."
+      - "textread <url|path> — fetch or read local file, assess, summarize through saved context."
+      - "textread <url|path> --context <override> — one-off context override."
       - "textread context edit — update the stored user profile / project list."
-      - "textread <url> --save — append to a reading log or IDEAS.yaml if relevant."
+      - "textread <url|path> --save — append to reading log; prompt for bookmark."
+      - "textread bookmark <url|path> --stars 4 --label ai,tooling — save rated bookmark."
+      - "textread bookmarks [--label ai] [--min-stars 3] — list bookmarks filtered."
+      - "textread convert <path> — convert PDF/DOC/XLSX/PPTX to cleaned markdown."
+      - "textread remap <url|path> — re-run agent on cached raw with current context."
+
+    format_support:
+      auto_detect: >
+        Input can be a URL, a local file path, or a directory of files.
+        Format is detected from mime type / extension: .html, .pdf, .docx, .xlsx,
+        .pptx, .txt, .md. Unknown types fall back to raw text extraction.
+      conversion:
+        command: "textread convert <path|url>"
+        purpose: >
+          Standalone conversion to cleaned markdown. No agent call — pure extraction.
+          Useful for archiving reference docs and feeding them into other tools.
+        formats:
+          pdf: pdfminer.six or pymupdf — strip headers, footers, page numbers.
+          docx: python-docx — preserve headings, tables as md tables.
+          xlsx: openpyxl — sheet → md table, one sheet per heading.
+          pptx: python-pptx — slide title + bullet text, notes if present.
+          html: newspaper4k / readability-lxml — main content only.
+        output: >
+          Writes <name>.md alongside raw file in cache. This is the token-efficient
+          version sent to the agent — not the raw binary.
+      storage_tiers: |
+        raw.<ext>         # original binary — archived once, never sent to LLM
+        raw.md            # cleaned markdown — what the agent actually sees
+        raw.meta.json     # url/path, fetched_at, content-type, format, size
+        mapping.yaml      # verdict + summary — regeneratable from raw.md
+
+    bookmarks:
+      purpose: >
+        Persistent rated reference layer. A bookmark is a saved read with a star rating
+        (1–5) and one or more labels. Labels build a preference map over time:
+        what subjects consistently earn 4–5 stars reveals the user's actual interests,
+        which can feedback into read-context.yaml to improve future verdicts.
+      storage: ~/.textread/bookmarks.yaml
+      schema: |
+        - url: https://example.com/article
+          path: null             # set if local file
+          title: "Article title"
+          stars: 4              # 1 (meh) to 5 (essential)
+          labels: [ai, tooling, mcp]
+          bookmarked_at: "2026-04-18T10:00:00Z"
+          mapping_path: ~/.textread/cache/<slug>/mapping.yaml
+          note: "optional freeform annotation"
+      preference_map: >
+        Future: aggregate bookmarks by label → compute avg stars per label →
+        surface as user preference signal. High-star labels can be injected into
+        read-context.yaml automatically or on request ("textread context sync-prefs").
+        This closes the loop: reads shape context, context shapes verdicts.
+      commands:
+        - "textread bookmark <url|path> --stars N --label l1,l2 [--note '...']"
+        - "textread bookmarks [--label <l>] [--min-stars N] [--sort stars|date]"
+        - "textread bookmark remove <url|path>"
+        - "textread bookmarks export --format md   # readable digest"
     context_model:
       stored_at: ~/.config/paperworlds/read-context.yaml
       contents:
@@ -284,8 +340,9 @@ developer_workflow:
         or a dedicated ~/.config/paperworlds/textread.yaml.
       layout: |
         ~/.textread/cache/<slug-or-hash>/
-          raw.<ext>        # content as fetched (html, pdf, txt...)
-          raw.meta.json    # url, fetched_at, content-type, final-url, status
+          raw.<ext>        # original binary — archived once, never sent to LLM
+          raw.md           # cleaned markdown — token-efficient form sent to agent
+          raw.meta.json    # url/path, fetched_at, content-type, format, final-url
           mapping.yaml     # structured verdict + extract — the smart part
       re_mapping: >
         "textread remap <url>" re-runs the agent on cached raw with the
@@ -312,10 +369,12 @@ developer_workflow:
         urllib.robotparser + httpx combo.
     open_questions:
       - Output shape — terse verdict by default, optional deep summary on flag?
-      - Cache invalidation — does anything auto-expire, or only manual refresh?
-      - Slug vs hash for cache key — human-readable is nicer but collisions hurt.
-      - Subagent invocation path — Claude Code Agent SDK, or plain Anthropic SDK call? SDK call is simpler and cheaper.
-      - PDFs, YouTube transcripts, paywalled content — scope for v1 or later?
+      - Cache invalidation — does anything auto-expire, or only manual refresh? Leaning manual only.
+      - Slug vs hash for cache key — human-readable is nicer but collisions hurt. Maybe slug + 6-char hash suffix.
+      - Subagent invocation path — Anthropic SDK direct (simpler, cheaper) vs Claude Code Agent SDK. Leaning direct.
+      - YouTube transcripts, paywalled content — explicitly out of scope for v1; note in README.
+      - Bookmark label taxonomy — freeform vs a curated set? Freeform for now, curated later via preference map.
+      - preference_map sync cadence — manual ("sync-prefs") or auto on every 5th bookmark?
 
   - name: texthook
     title: Git hooks integration
@@ -331,12 +390,226 @@ developer_workflow:
         note: MCP server for SAST/SCA/secrets/IaC. Could pair with texthook for pre-commit security scanning.
 
   - name: textwatch
-    title: Reactive filesystem trigger
-    priority: 4
-    status: idea
+    title: Standalone filesystem watcher daemon — superset of the pp daemon
+    priority: 2
+    status: brainstorm
+    date: "2026-04-18"
     description: >
-      Filesystem watcher that triggers agentic workflows on file events.
-      Save a spec file → textprompts DAG runs automatically. The reactive layer.
+      Rule-based, standalone background daemon. Watches configured paths for
+      filesystem events and fires actions (notify, trigger, log) when patterns
+      match. Generalizes and replaces the pp daemon currently baked into
+      paperagents — that daemon's behavior becomes a built-in rule set.
+      Separate repo (paperworlds/textwatch), managed via textworkspace like
+      textproxy (tw watch start/stop/status/log).
+    why: >
+      The pp daemon (paperagents/daemon.py) already does polling, PID management,
+      lock files, double-fork, discovery, health, and notification — but it is
+      hardcoded to paperagents concepts (pipeline.yaml, .state files, prompt slugs).
+      Any other tool that needs reactive behavior would have to duplicate all of
+      that plumbing. textwatch extracts the infrastructure, makes it rule-driven,
+      and lets every text- tool register its own watch rules without owning a daemon.
+    supersedes:
+      target: paperagents/daemon.py + paperagents/daemon CLI commands
+      migration: >
+        Once textwatch is stable, pp daemon commands (pp daemon start/stop/status)
+        become thin wrappers that ensure textwatch is running with the pp rule set
+        loaded. Eventually the embedded daemon in paperagents is removed entirely.
+    architecture:
+      core: >
+        Single poll loop (default 2s, configurable). On each tick, evaluates all
+        registered watch rules against the current filesystem state. Fires matching
+        actions. Tracks seen state to avoid re-firing on unchanged files.
+      rule_schema: |
+        # in ~/.config/paperworlds/textwatch.yaml or per-project pipeline.yaml
+        rules:
+          - name: pp-state-notify
+            path: ~/.config/paperagents/state/         # or glob pattern
+            pattern: "*.state"
+            on: [modified, created]
+            action: notify
+            template: "pp: {stem} → {content}"
+
+          - name: pp-spec-trigger
+            path: ~/projects/*/features/*/prompts/
+            pattern: "[0-9][0-9][0-9]-*.md"
+            on: [created]
+            action: run
+            command: "pp run --pipeline {pipeline_yaml}"
+
+          - name: textread-remap
+            path: ~/.textread/cache/
+            pattern: "raw.md"
+            on: [created]
+            action: run
+            command: "textread remap --cached {dir}"
+      event_types: [created, modified, deleted]
+      action_types:
+        notify: macOS notification (osascript) — title + body from template
+        run: shell command — runs synchronously in a subprocess, stdout to daemon log
+        log: append a line to a configurable log file
+      convention_sources:
+        - ~/.config/paperworlds/textwatch.yaml   # global rules
+        - <project>/pipeline.yaml under watch:   # per-project rules, auto-discovered
+      polling_vs_events: >
+        v1: polling (mirrors existing pp daemon approach, zero extra deps).
+        Later: watchdog / kqueue (macOS FSEvents) as optional backend for
+        lower latency and no CPU spin on idle. Toggle via config.
+    pp_builtin_rules: >
+      textwatch ships with a built-in pp rule set that replicates current
+      paperagents daemon behavior: watch registered_paths for *.state changes
+      → send macOS notification; health_tick for stale tasks; discovery_tick
+      for new projects. pp daemon config (registered_paths, stale_minutes,
+      poll_interval) is read by textwatch so migration is zero-config.
+    textworkspace_integration:
+      commands:
+        - "tw watch start|stop|restart|status|log"
+        - "tw watch rules [--project <path>]   # show active rule set"
+        - "tw watch register <path>            # add project to watched paths"
+      launchd: >
+        Same pattern as textproxy: tw watch os-install drops a launchd plist
+        so the daemon starts on login without manual intervention.
+
+  - name: tw-lead-loop
+    title: tw as the lead's orchestration interface — brief, audit, review, actions, hook
+    priority: 1
+    status: brainstorm
+    date: "2026-04-18"
+    description: >
+      textworkspace evolves from a package manager into the lead's command center.
+      Five tightly connected ideas that form a single feedback loop: orient →
+      execute → trace → reflect → improve. All live as tw subcommands — no
+      new repos needed (except where scale demands it later).
+    loop: |
+      tw brief       → orient: what's happening right now
+      agents execute → using YAML-defined action specs (playbooks)
+      tw audit       → trace: unified log of all agent actions
+      tw review      → reflect: structured review after task / project completes
+      ↑ improvements flow back to lead-profile, action specs, textwatch rules
+
+    commands:
+
+      tw_brief:
+        description: >
+          Generates a concise situational briefing for the lead or any new session.
+          Aggregates open textforums threads, pending PLAN tasks across registered
+          repos, recent textread bookmarks (last N days), and last session outcome.
+          Output: a compact YAML or markdown snapshot — "here's where we are."
+        usage:
+          - "tw brief               # full snapshot"
+          - "tw brief --format md   # markdown, pasteable into a prompt"
+          - "tw brief --since 2d    # only activity in last 2 days"
+        sources:
+          - textforums list --status open
+          - PLAN.yaml files in registered repos (pending tasks)
+          - textread bookmarks (recent, min-stars configurable)
+          - last .state files across watched projects
+        note: >
+          This is what you hand to a fresh session instead of re-explaining everything.
+          Replaces the ad-hoc "here's what's happening" context dump.
+
+      tw_hook:
+        description: >
+          Git hook installer and runner. Small enough to live as tw hook, not a
+          separate repo. Drops scripts into .git/hooks/ for the current repo.
+          Hooks call back into tw hook run <event> which dispatches to the right
+          action. No daemon — git does the triggering.
+        hooks:
+          pre_commit: >
+            Lint-style checks: flag risky patterns (rm -rf, force push, secrets).
+            Optional: call Datadog Code Security MCP for SAST if available.
+          post_commit: >
+            Summarize the diff, log to tw audit (this commit, this agent/session).
+            Optional: suggest commit message if none given.
+          post_merge: >
+            Notify relevant textforums threads if commit closes a tagged issue.
+        usage:
+          - "tw hook install [--hooks pre-commit,post-commit]"
+          - "tw hook run <event>   # called by the installed hook scripts"
+          - "tw hook status        # show installed hooks for current repo"
+        note: texthook absorbed here. No separate repo.
+
+      tw_audit:
+        description: >
+          Unified append-only action log across all agents and sessions.
+          Every significant agent action (commit, forum post, pp run, textread)
+          is logged to a single structured file. The source of truth for
+          "what did agents actually do."
+        storage: ~/.textread/audit.yaml   # or ~/.config/paperworlds/audit.yaml
+        entry_schema: |
+          - ts: "2026-04-18T10:32:00Z"
+            agent: "claude@textserve-abc123"   # or "human" or "pp"
+            session: "abc123"
+            repo: "textserve"
+            action: commit                      # commit | forum-post | pp-run | read | review
+            detail:
+              hash: "a1b2c3"
+              message: "feat: add token refresh"
+            tags: [textserve, auth]
+        sources: >
+          tw hook (post-commit), pp (on task complete/blocked), textforums (on new post),
+          textread (on --save), tw review (on review complete). Each tool appends;
+          tw audit is the reader.
+        usage:
+          - "tw audit list [--repo textserve] [--since 7d] [--action commit]"
+          - "tw audit tail   # live feed, like tail -f"
+          - "tw audit export --format md --since 2026-04-14"
+
+      tw_review:
+        description: >
+          Post-task and post-project reflection. Reads tw audit entries for the
+          scope (task or project), runs a fresh agent to synthesize: what went
+          well, what was repeated/redundant, what should change in YAML action
+          specs or lead-profile. Output: a structured review YAML saved alongside
+          the project logs.
+        triggers:
+          - Manual: "tw review --task <id> --project <path>"
+          - Automatic (via textwatch rule): when all prompts in a pipeline reach
+            DONE state, fire tw review for that pipeline.
+        output_schema: |
+          scope: project | task
+          period: {from: ..., to: ...}
+          summary: "one paragraph"
+          what_worked: ["..."]
+          what_to_change: ["..."]
+          action_spec_suggestions: ["..."]  # concrete edits to playbooks
+          lead_profile_deltas: ["..."]      # patterns observed vs profile
+        usage:
+          - "tw review --task 003 --project ~/projects/personal/paperworlds/textserve"
+          - "tw review --project ~/projects/personal/paperworlds/textserve --since 2026-04-01"
+
+      tw_actions:
+        description: >
+          YAML-defined action sequences (playbooks). Like Claude Code skills but
+          concise, accessible without a conversation, and composable with other
+          tw commands. Stored in ~/.config/paperworlds/actions/ as named YAML files.
+          Executed by tw run <action-name>.
+        why: >
+          Prompts (pp) are heavyweight — a full markdown file per task. Skills
+          are conversation-scoped. Playbooks fill the gap: short, named sequences
+          for recurring lead workflows (start-session, post-task cleanup, daily
+          standup) that any agent or human can invoke without context.
+        schema: |
+          name: start-session
+          description: "Orient at the start of any new work session."
+          steps:
+            - run: tw brief --format md
+            - run: textforums list --status open
+            - run: tw status
+            - prompt: "Review the above and identify the single next action."
+        step_types:
+          run: shell command — output shown, appended to audit log
+          prompt: natural language instruction injected into agent context
+          ask: pause and request human input before continuing
+          fork: run steps in parallel (named branches)
+        usage:
+          - "tw actions list"
+          - "tw run <name>           # execute a playbook"
+          - "tw actions edit <name>  # open in $EDITOR"
+          - "tw actions new <name>   # scaffold a new playbook"
+        builtin_actions:
+          - start-session    # brief + forums + status
+          - post-task        # audit commit + close forums thread if resolved
+          - daily-review     # tw review --since yesterday
 
 quality:
   - name: textbench
