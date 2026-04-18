@@ -56,3 +56,6 @@ uv run pytest tests/ -v
 - Tests in `tests/`, run with `uv run pytest`
 - Regression tests mandatory for bug fixes
 - Use small fixtures; tests must complete in milliseconds
+
+## Forums
+Before starting work, run `textforums list --tag textworkspace --status open` and check for open threads relevant to your task. Post a thread tagged `textworkspace` if you hit a cross-repo blocker.
