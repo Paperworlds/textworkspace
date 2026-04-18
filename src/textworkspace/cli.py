@@ -228,6 +228,8 @@ def init() -> None:
     click.echo()
     _init_textserve(cfg, tools)
     click.echo()
+    _init_textread(cfg, tools)
+    click.echo()
 
     # Write config
     save_config(cfg)
@@ -307,6 +309,60 @@ def _init_textserve(cfg: Any, tools: dict) -> None:
         _bootstrap_go_tool("textserve", cfg)
     else:
         click.echo("  skipped")
+
+
+def _init_textread(cfg: Any, tools: dict) -> None:
+    info = tools.get("textread")
+    click.echo("textread  (context-aware link reader, optional)")
+    if not (info and info.installed):
+        click.echo("  not installed — install with: pip install textread")
+        return
+
+    click.echo(f"  already installed ({info.version or '?'})")
+    cfg.tools["textread"] = ToolEntry(
+        version=info.version or "",
+        source=info.source or "pypi",
+        bin=info.bin_path,
+    )
+
+    # Show current config knobs
+    _TEXTREAD_CFG_PATH = Path.home() / ".config" / "paperworlds" / "textread.yaml"
+    tr_cfg: dict = {}
+    if _TEXTREAD_CFG_PATH.exists():
+        try:
+            import yaml as _yaml
+            tr_cfg = _yaml.safe_load(_TEXTREAD_CFG_PATH.read_text()) or {}
+        except Exception:
+            pass
+
+    model = tr_cfg.get("default_model", "haiku")
+    backend = tr_cfg.get("agent_backend", "sdk")
+    current_profile = tr_cfg.get("default_profile")
+    click.echo(f"  default_model={model}  agent_backend={backend}  default_profile={current_profile or '(none)'}")
+
+    # Offer to set default_profile from textaccounts if available
+    try:
+        from textaccounts.api import list_profiles as _list_profiles
+        profiles = _list_profiles()
+        if profiles and isinstance(profiles[0], dict):
+            profile_names = [p["name"] for p in profiles]
+        else:
+            profile_names = list(profiles)
+        if profile_names:
+            click.echo(f"  available profiles: {', '.join(profile_names)}")
+            chosen = click.prompt(
+                "  Set default_profile (enter name or leave blank to skip)",
+                default="",
+                show_default=False,
+            ).strip()
+            if chosen and chosen in profile_names:
+                tr_cfg["default_profile"] = chosen
+                _TEXTREAD_CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                import yaml as _yaml
+                _TEXTREAD_CFG_PATH.write_text(_yaml.dump(tr_cfg, default_flow_style=False))
+                click.echo(f"  default_profile set to '{chosen}'")
+    except ImportError:
+        pass
 
 
 def _init_fish_functions() -> None:
@@ -460,6 +516,7 @@ _TOOL_ALIASES: dict[str, list[str]] = {
     "textsessions": ["ts"],
     "textaccounts": ["ta"],
     "paperagents": ["pp"],
+    "textread": [],
 }
 
 # Tools eligible for `tw shell install`.
@@ -473,6 +530,7 @@ _INSTALLABLE_TOOLS: list[tuple[str, str, list[str], dict[str, str]]] = [
     ("textaccounts", "TEXTACCOUNTS", ["ta"], {"switch": "show"}),
     ("textsessions", "TEXTSESSIONS", ["ts"], {}),
     ("paperagents", "PAPERAGENTS", ["pp"], {}),
+    ("textread", "TEXTREAD", [], {}),
 ]
 
 
@@ -502,10 +560,11 @@ def aliases() -> None:
 # Python tools that can be installed from local repos.
 # Order matters: dependencies must come first.
 # deps maps tool -> list of other _PYTHON_TOOLS it needs injected via --with-editable.
-_PYTHON_TOOLS = ("textaccounts", "textsessions", "textworkspace")
+_PYTHON_TOOLS = ("textaccounts", "textsessions", "textread", "textworkspace")
 _PYTHON_TOOL_DEPS: dict[str, list[str]] = {
     "textaccounts": [],
     "textsessions": ["textaccounts"],
+    "textread": [],
     "textworkspace": [],
 }
 
@@ -513,6 +572,7 @@ _PYTHON_TOOL_DEPS: dict[str, list[str]] = {
 # Each entry: (tool_name, just_recipe)  — recipe defaults to "install".
 _GO_TOOLS_DEV: list[tuple[str, str]] = [
     ("textproxy", "install"),
+    ("textserve", "install"),
 ]
 
 
