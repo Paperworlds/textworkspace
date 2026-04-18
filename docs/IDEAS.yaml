@@ -652,3 +652,246 @@ validation:
       takeaway: >
         Open-source agent harness. Different level — they rebuild the agent loop,
         we wrap Claude Code's. Worth watching for combo execution patterns.
+
+# ---------------------------------------------------------------------------
+# COGNITIVE ARCHITECTURE — how the tools map to cognitive work
+# (merged from docs/MAP.yaml)
+# ---------------------------------------------------------------------------
+
+cognitive_architecture:
+  layers:
+    prospective:
+      name: Working memory / intent
+      tool: spec (SPEC-TEMPLATE.yaml)
+      holds: What to build, what's unknown before building
+      note: >
+        The spec's explore: section is the query interface into the cognitive
+        layer — unknowns the LEAD has before requirements can be written.
+        Eventually pp can auto-fill these from forums + textmap.
+
+    episodic:
+      name: Episodic memory
+      tool: textforums
+      holds: "Things that happened — API renames, blockers, migrations"
+      storage: ~/.textforums/<slug>/thread.yaml
+      lifespan: "Short — open, acted on, closed"
+
+    semantic:
+      name: Semantic / structural memory
+      tool: textmap
+      holds: "Things that are true — what calls what, what depends on what"
+      storage: "Kuzu graph DB (prototype: graph-roadmap)"
+      lifespan: "Long — persists until code changes"
+
+    recall_engine:
+      name: Recall / delivery
+      tool: pp context injection (paperagents)
+      holds: Pulls episodic + semantic layers together before agent starts
+      note: >
+        pp run queries forums + textmap, merges results, prepends a unified
+        context block to the prompt. Forums-only today; textmap enriches later.
+
+  full_loop: |
+    LEAD writes spec (intent + unknowns)
+           ↓
+    pp run NNN
+      ├─ forums query  → resolves temporal unknowns ("was X renamed?")
+      ├─ textmap query → resolves structural unknowns ("does X exist?")
+      └─ remaining     → spawn discovery agent (mode: explore)
+           ↓
+    LEAD reviews answers, hardens requirements + design
+           ↓
+    implement agent executes against locked spec
+
+  cognee_mapping:
+    remember: agent posts forum thread OR textmap auto-detects a change
+    recall: pp queries forums + graph before spawning worker
+    forget: textforums close — thread resolved, no longer injected
+    improve: graph annotations refined over time; forum threads enriched by later agents
+
+  current_status:
+    working: [textforums, spec_format]
+    prototype: [textmap]
+    planned: [pp_context_injection]
+    gap: >
+      pp context injection is the next step that makes the cognitive loop
+      pay off. Until then, agents rely on discipline (read-on-start convention)
+      rather than automatic delivery.
+
+# ---------------------------------------------------------------------------
+# FORUMS + TEXTMAP INTEGRATION SPEC
+# (merged from docs/FORUMS-AGENT-SPEC.md — the detailed implementation plan)
+# ---------------------------------------------------------------------------
+
+forums_textmap_spec:
+  status: draft
+  date: "2026-04-14"
+
+  problem: >
+    Agents work in isolation. Cross-repo blockers are logged but not shared.
+    No awareness of structural relationships between repos.
+
+  goal: >
+    Give every agent automatic, pre-task context from forums (temporal) and
+    textmap (structural). Three properties: discovery, delivery, feedback.
+
+  boundary:
+    textforums: "Temporal coordination — things happening now"
+    textmap: "Structural knowledge — things that are true"
+    overlap: >
+      Both feed pp context injection. The agent sees one context block.
+    reinforcement:
+      - "Forums feed the graph: a rename thread is semantically a graph edge."
+      - "Graph sharpens forum relevance: only inject threads about symbols the prompt touches."
+      - "Graph detects what forums miss: deleted function → auto-flag even with no thread."
+
+  unified_injection: |
+    pp run 003
+      ├─ read prompt frontmatter → repo: textsessions
+      ├─ FORUMS: textforums list --tag textsessions --status open
+      ├─ GRAPH: textmap query --repo textsessions --scope prompt-003
+      ├─ MERGE + DEDUPLICATE (forum wording wins, graph adds "Affects:" line)
+      └─ format as unified context block, spawn worker
+
+  merge_rules:
+    - "Same change (matched by symbol/commit) → merge, forum wording wins, graph adds Affects:"
+    - "Forum only → inject as-is"
+    - "Graph only → auto-summary: 'textmap detected: {description}'"
+    - "Deduplicate by symbol"
+
+  phasing:
+    now: "pp queries forums only"
+    next: "pp queries forums + textmap, agents see merged context"
+    later: "textmap auto-generates forum threads for detected breakage"
+
+  forums_layers:
+    layer_1_tags:
+      description: "Every thread MUST have ≥1 repo tag"
+      additional: [prompt ID, category (blocker/info/question)]
+      status: convention
+
+    layer_2_injection:
+      description: "pp run prepends open forum threads to prompt context"
+      filtering:
+        - "Default: threads tagged with prompt's repo: field"
+        - "Blocker threads always injected (highlighted)"
+        - "Info threads injected but quieter"
+        - "Resolved threads never injected"
+      status: planned
+
+    layer_3_write_on_block:
+      description: >
+        Agent hits cross-repo dependency → post forum thread, log slug,
+        set state BLOCKED. Enforced via prompt template.
+      status: convention
+
+    layer_4_post_task_scan:
+      description: >
+        After worker completes, pp checks for new threads created during
+        the run. Logs and notifies lead.
+      status: planned
+
+    layer_5_forums_as_dependency:
+      description: >
+        Thread tagged blocks:<prompt-id> prevents that prompt from running.
+        Thread must be closed before pp will spawn the worker.
+      status: planned
+
+  textmap_prototype:
+    location: graph-roadmap
+    current: "Kuzu graph, Node/Edge tables, graphk CLI, graph_mcp MCP server"
+    needed:
+      - "Code-level nodes and edges (functions, modules, imports)"
+      - "Repo-scoped queries (what in X affects Y)"
+      - "Change detection (diff code state vs graph)"
+      - "Query interface for pp (shell out to graphk CLI)"
+
+  implementation_phases:
+    - phase: 1
+      what: Tag convention docs
+      where: textforums, CONVENTIONS
+      effort: low
+    - phase: 2
+      what: pp context injection (forums only)
+      where: paperagents
+      effort: medium
+    - phase: 3
+      what: Write-on-block prompt template
+      where: paperagents/prompts
+      effort: low
+    - phase: 4
+      what: pp post-task scan
+      where: paperagents
+      effort: medium
+    - phase: 5
+      what: Forums as dependency
+      where: paperagents
+      effort: medium
+    - phase: 6
+      what: Code-level nodes in graph
+      where: graph-roadmap
+      effort: medium
+    - phase: 7
+      what: graphk query in pp injection
+      where: paperagents, graph-roadmap
+      effort: medium
+    - phase: 8
+      what: Merge/dedup logic
+      where: paperagents
+      effort: medium
+    - phase: 9
+      what: textmap auto-posts forum threads
+      where: graph-roadmap, textforums
+      effort: high
+
+  open_questions:
+    - "Should textforums new require --tag or just warn?"
+    - "Full thread or latest entry in injection? (Latest + count, with show pointer)"
+    - "Resolved thread trace for N days? (Probably not — skip v1)"
+    - "pp calls graphk CLI (decoupled). If not on PATH, skip silently."
+    - "textmap auto-generated threads: author = @textmap"
+    - "Merge heuristics: start with exact symbol match only"
+    - "Code-level nodes: same Kuzu DB, different node types"
+    - "graph-sync --from-code: start with Python AST parsing"
+
+# ---------------------------------------------------------------------------
+# REPO SEPARATION — what needs its own repo vs lives in textworkspace
+# (decided 2026-04-18)
+# ---------------------------------------------------------------------------
+
+repo_decisions:
+  separate_repos:
+    - name: textread
+      reason: different deps (newspaper4k, anthropic SDK), standalone CLI
+      status: scaffolded, prompts ready
+    - name: textmap
+      reason: Go + Kuzu, different language
+      status: prototype at graph-roadmap
+    - name: textserve
+      reason: Go binary, MCP fleet management
+      status: open-sourcing in progress
+    - name: textcombos
+      reason: community YAML repo (config files, not a tool)
+      status: not created yet
+    - name: textwatch
+      reason: standalone daemon, absorbs pp daemon
+      status: brainstorm
+      dependency: textprompts must ship first (refactored, open-sourced)
+
+  lives_in_textworkspace:
+    - name: tw hook
+      absorbed: texthook
+      reason: small, git hooks are just scripts installed by tw
+    - name: tw brief
+      reason: aggregates signals from existing tw-managed tools
+    - name: tw audit
+      reason: unified log, reads from all tw-managed tools
+    - name: tw review
+      reason: post-task reflection, reads audit log
+    - name: tw actions
+      reason: YAML playbooks executed by tw run
+
+  lives_in_paperagents:
+    - name: textbench
+      as: pp bench
+      reason: tests prompts, which is paperagents' domain
