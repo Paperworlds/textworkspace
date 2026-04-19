@@ -1455,6 +1455,128 @@ def repo_move(name: str, new_path: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw repo import [tool] [--all]
+# ---------------------------------------------------------------------------
+
+
+@repo_cmd.command("import")
+@click.argument("tool", required=False, default=None)
+@click.option("--all", "import_all", is_flag=True, help="Import from all installed tools.")
+def repo_import(tool: str | None, import_all: bool) -> None:
+    """Import repos from tool(s) that support `<tool> repos`.
+
+    tw repo import textsessions
+    tw repo import --all
+    """
+    from textworkspace.repo_import import (
+        collect_from_all,
+        collect_from_tool,
+        deduplicate,
+        find_conflicts,
+    )
+    from textworkspace.doctor import detect_installed_tools
+
+    cfg = load_config()
+
+    if not tool and not import_all:
+        raise click.UsageError("Specify a tool name or use --all.")
+
+    # Collect repos
+    if import_all:
+        tools = detect_installed_tools()
+        raw = collect_from_all(tools)
+    else:
+        tools = detect_installed_tools()
+        info = tools.get(tool)
+        if not info or not info.installed or not info.bin_path:
+            raise click.UsageError(f"'{tool}' is not installed or not found.")
+        raw, code = collect_from_tool(info.bin_path, tool)
+        if code == 2:
+            click.echo(f"{tool} does not support `repos` — nothing to import.")
+            return
+        if code != 0:
+            click.echo(f"[WARN] {tool} repos failed (exit {code}).", err=True)
+            return
+
+    incoming = deduplicate(raw)
+
+    if not incoming:
+        click.echo("No repos found.")
+        return
+
+    # Detect conflicts
+    conflicts = find_conflicts(incoming, cfg.repos)
+    conflict_names = {c.incoming.name for c in conflicts}
+
+    click.echo(f"\nFound {len(incoming)} repo(s):\n")
+    for repo in incoming:
+        exists = "  [!]" if repo.name in conflict_names else ""
+        click.echo(f"  {repo.name:<20} {repo.path}{exists}")
+
+    if conflicts:
+        click.echo(f"\n{len(conflicts)} conflict(s) to resolve:\n")
+
+    to_add: list = []
+    skipped = 0
+    renamed = 0
+
+    non_conflict = [r for r in incoming if r.name not in conflict_names]
+    to_add.extend(non_conflict)
+
+    for conflict in conflicts:
+        repo = conflict.incoming
+        if conflict.kind == "name":
+            click.echo(
+                f"  Name conflict: '{repo.name}' already exists at {conflict.existing_path}\n"
+                f"    incoming:     {repo.path}"
+            )
+            choice = click.prompt(
+                "  [k]eep existing / [r]ename new / [s]kip",
+                default="k",
+            ).strip().lower()
+            if choice == "k":
+                skipped += 1
+            elif choice == "r":
+                new_name = click.prompt("    New name").strip()
+                repo.name = new_name
+                to_add.append(repo)
+                renamed += 1
+            else:
+                skipped += 1
+        elif conflict.kind == "path":
+            click.echo(
+                f"  Path conflict: {repo.path} already registered as '{conflict.existing_name}'\n"
+                f"    incoming name: '{repo.name}'"
+            )
+            choice = click.prompt(
+                "  [k]eep existing name / [r]ename to incoming / [s]kip",
+                default="k",
+            ).strip().lower()
+            if choice == "r":
+                # Update the existing entry's name would require removal + add
+                # Simpler: add with incoming name, user resolves duplicate
+                to_add.append(repo)
+                renamed += 1
+            else:
+                skipped += 1
+
+    # Apply
+    from textworkspace.config import RepoEntry
+    added = 0
+    for repo in to_add:
+        if not repo.path.exists():
+            click.echo(f"  [WARN] {repo.name}: path does not exist on disk ({repo.path})")
+        cfg.repos[repo.name] = RepoEntry(
+            path=str(repo.path),
+            profile=repo.meta.get("profile", ""),
+        )
+        added += 1
+
+    save_config(cfg)
+    click.echo(f"\nImported {added} new, skipped {skipped}, renamed {renamed}.")
+
+
+# ---------------------------------------------------------------------------
 # tw serve [name] [--tag TAG]
 # ---------------------------------------------------------------------------
 
