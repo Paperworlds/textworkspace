@@ -256,13 +256,37 @@ path_tracking:
     4. Runs tw sync
     5. Warns about hardcoded paths (prints grep hint)
 
+  repos_command: |
+    <tool> repos
+    Prints: REPO <name> <path> [key=value ...]
+    - One line per known project, using the tool's own labels/names
+    - <path> is absolute (tilde-expanded by the tool before printing)
+    - [key=value ...] optional metadata — parsers MUST ignore unknown keys
+    - Reserved keys: profile=, tags=, description=
+    - Exit code 0 = success (even if output is empty)
+    - Exit code 2 = tool does not track projects (orchestrators skip silently)
+
+  tw_repo_import: |
+    tw repo import <tool>   — import repos from one tool
+    tw repo import --all    — iterate all installed tools that support repos
+    1. Invoke <tool> repos, parse REPO lines
+    2. Exit 2 from tool → skip silently
+    3. Other non-zero exit → [WARN] and continue
+    4. Present interactive review list before writing
+    5. Conflicts (same name or same path) → prompt keep/rename/skip
+    6. Write to ~/.config/paperworlds/config.yaml
+
   tools:
     - tool: textsessions
       config: ~/.config/textsessions/config.toml
-      status: planned
+      doctor: planned
+      repo_move: planned
+      repos: yes  # reads config.toml RepoConfig list; emits REPO <label> <path> profile=<profile>
     - tool: textprompts
       config: ~/.config/textprompts/config.toml
-      status: planned
+      doctor: planned
+      repo_move: planned
+      repos: planned
 
 # ---------------------------------------------------------------------------
 # DEVELOPER WORKFLOW
