@@ -2327,7 +2327,6 @@ def workspaces_status() -> None:
     click.echo(f"  started_at: {state.get('started_at', '?')}")
 
 
-@workspaces_cmd.command("add")
 def _prompt_pick_list(items: list[str], prompt: str, allow_freetext: bool = True) -> str:
     """Show a numbered pick-list and return the chosen value.
 
@@ -2350,6 +2349,7 @@ def _prompt_pick_list(items: list[str], prompt: str, allow_freetext: bool = True
     return raw
 
 
+@workspaces_cmd.command("add")
 def workspaces_add() -> None:
     """Add a new workspace interactively."""
     from textworkspace.config import ServersConfig, WorkspaceConfig
