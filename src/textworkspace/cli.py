@@ -645,7 +645,7 @@ def _tool_version(name: str, bin_path: str | None) -> str:
         return "unknown"
     try:
         out = subprocess.check_output(
-            [bin_path, "--version"], stderr=subprocess.DEVNULL, text=True, timeout=3
+            [bin_path, "--version"], stderr=subprocess.DEVNULL, text=True, timeout=15
         ).strip()
         # Extract "X.Y.Z (hash)" or just "X.Y.Z" from e.g. "tool, version X.Y.Z (hash)"
         for word in out.split():

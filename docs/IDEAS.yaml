@@ -970,6 +970,159 @@ forums_textmap_spec:
 # (decided 2026-04-18)
 # ---------------------------------------------------------------------------
 
+textmap_population:
+  status: planning
+  date: "2026-04-19"
+  priority: next
+  title: Populate the graph — sources, schema extensions, ingestion pipeline
+  summary: >
+    The graph (graph-roadmap prototype) has a working schema, Kuzu backend, and
+    graph-sync.py. What it lacks is ingestion from the real data sources that
+    already exist. This is the plan to make the graph useful from day one and
+    unlock the open-source release.
+
+  schema_extensions: >
+    The graph-roadmap.md schema (system, initiative, goal, problem, team,
+    decision, external) covers structural knowledge. Two node types are missing
+    and must be added before ingestion:
+
+    - protocol: a named, executable procedure for a specific action (commit, PR,
+        branch naming, review). Derived from skills/rules/*.mdc. Fields: name,
+        action_type, trigger_context, constraints[]. This is what the action spec
+        subgraph model builds on — a protocol is a queryable playbook template.
+
+    - intent: an action/question that maps to a specific tool, skill, agent, or
+        command. Derived from skills/claude-code/memory/toolmap.yaml which is already
+        graph-shaped (intent → tool/skill/agent). Fields: description, maps_to (ref),
+        tool_type (mcp|bash|agent|skill), notes.
+
+  data_sources:
+    - source: skills/claude-code/memory/toolmap.yaml
+      type: structured YAML
+      produces: Intent nodes + Tool/Skill/Agent edges
+      priority: 1
+      why: >
+        Already graph-shaped. Maps intent → tool/skill/agent/command across
+        observability, databases, comms, CI/CD, kubernetes, security, paradex,
+        git workflow. Also contains repos list (Repo nodes) and cluster_mapping
+        (Env → Cluster → Workspace edges). Highest signal-to-effort ratio.
+
+    - source: mcpf/toolmap-tags.yaml
+      path: ~/.local/mcpf/toolmap-tags.yaml
+      type: structured YAML
+      produces: Domain→MCPServer edges (enriches Intent nodes)
+      priority: 1
+      why: >
+        Maps conceptual domains (snowflake, grafana, docker) to mcpf server tags.
+        Completes the Intent→Tool edge by adding which MCP server handles it.
+        Small file, direct import.
+
+    - source: skills/rules/*.mdc
+      type: semi-structured Markdown with YAML frontmatter
+      produces: Protocol nodes
+      priority: 2
+      why: >
+        Each .mdc file is a named rule with trigger context and constraints.
+        commit-and-pr-conventions.mdc, git-branch-naming.mdc, containers-first.mdc,
+        dev-workflow.mdc, etc. — these are the protocols an agent must follow.
+        Parsing: read frontmatter (description, alwaysApply) + body as constraint text.
+        Links to Workspace nodes (work, personal) via trigger_context.
+
+    - source: skills/workspace/projects/*.md
+      type: narrative Markdown
+      produces: Initiative nodes (matches graph-roadmap initiative type)
+      priority: 2
+      why: >
+        paperworlds.md, graph-roadmap.md, graph-mcp.md, pp-scaffold.md etc.
+        Each file is an initiative with motivation, status, and connections to
+        systems. Parse: H1 as name, H2 sections as fields, links between projects
+        as `motivated_by` or `part_of` edges.
+
+    - source: skills/claude-code/memory/feedback_*.md
+      type: typed Markdown (frontmatter: type, name, description)
+      produces: Constraint nodes (extends decision type — learned behavioral rules)
+      priority: 3
+      why: >
+        ~60 feedback files encoding what worked and what not to do. Each is a
+        proven constraint on agent behavior — effectively ADRs for how to work.
+        These populate the Recommendation edges in action specs. Parse frontmatter,
+        body becomes constraint.description.
+
+    - source: skills/workspace/IDENTITY.md + SOUL.md + TOOLS.md
+      type: structured Markdown
+      produces: Owner node (type: team, singleton — "Paolo")
+      priority: 3
+      why: >
+        Defines roles, decision authority, stack. Single Owner node with
+        `owns` edges to all repos and initiatives. Also source of permitted/
+        restricted actions (decision authority table → permission edges).
+
+    - source: skills/claude-code/agents/*.md
+      type: structured Markdown
+      produces: Agent nodes (type: system, subtype: agent)
+      priority: 3
+      why: >
+        pr-reviewer, go-vuln-fix, snowflake-cost, wrap-it-up, etc.
+        Each agent is a system node with `uses` edges to its required tools.
+        Enables graph query: "what agent handles intent X?"
+
+    - source: mono git history (paradigm/mono log)
+      type: unstructured (git log)
+      produces: Decision nodes (type: decision — ADR-light from commit messages)
+      priority: 4
+      why: >
+        Historical decisions embedded in commit messages and PR descriptions.
+        Lower priority — requires extraction heuristic. Worth doing once the
+        rest of the graph has enough nodes to link decisions against.
+
+  ingestion_command: >
+    textmap sync — idempotent, runs all ingestors in priority order.
+    Each source has a dedicated ingestor (Python module in graph-roadmap repo).
+    Uses MERGE not INSERT — safe to run repeatedly.
+    Logs what was added/updated/skipped per run.
+
+    textmap sync --source toolmap       # single source
+    textmap sync --dry-run              # show what would change
+    textmap sync --all                  # full population (default)
+
+  ingestor_architecture:
+    pattern: >
+      Each source type gets one ingestor class implementing:
+        parse(path) -> list[Node | Edge]
+        upsert(nodes, edges, conn: kuzu.Connection)
+      Shared infrastructure: YAML frontmatter parser, Markdown section extractor,
+      slug generator (human-readable, from name/path), Kuzu MERGE wrapper.
+    location: graph-roadmap repo as textmap/ingestors/
+
+  open_source_scope: >
+    What ships as open-source textmap:
+    - Schema (node + edge types, including new protocol + intent types)
+    - Kuzu sync infrastructure (graph-sync.py evolved into textmap sync)
+    - Ingestor framework + reference ingestors (toolmap.yaml reader, .mdc reader)
+    - graphk/graph-query CLI (query layer)
+    - graph_mcp MCP server
+    What stays private:
+    - The actual data files (toolmap.yaml, skills/, memory/)
+    - Personal graph.yaml content
+    Users run textmap sync against their own skills/memory directories.
+
+  open_questions:
+    - >
+      Multi-workspace: toolmap.yaml today covers work (paradigm). Personal workspace
+      (paperworlds) lives in CONVENTIONS.yaml. Should both be in one graph or
+      separate Kuzu databases? Leaning: same DB, Workspace nodes as scope filter.
+    - >
+      Schema versioning: when a node type gains a new field, how does sync handle
+      existing nodes? Kuzu ALTER TABLE or full rebuild? Leaning: rebuild on schema change.
+    - >
+      Protocol node linking: rules/*.mdc files have `alwaysApply: true` or path globs.
+      How does "applies to repo X" get encoded? Option: Protocol -[APPLIES_TO]-> Repo
+      where Repo has workspace/path metadata.
+    - >
+      Feedback files are personal lessons, not universal rules. Should they be
+      in the graph at all, or stay as memory-only? Leaning: in graph, tagged
+      `personal`, excluded from open-source seed data.
+
 repo_decisions:
   separate_repos:
     - name: textread
