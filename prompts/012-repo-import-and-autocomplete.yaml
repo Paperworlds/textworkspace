@@ -40,24 +40,52 @@ explore:
   unknowns:
     - id: U01
       question: "What's the exact shape of textsessions state YAML files? What field holds the project path?"
-      answer: "[to be filled by T00 — read textsessions/src/textsessions/sessions.py and a real state file]"
+      answer: |
+        State YAML files do NOT contain a project path field at all. The repo path
+        lives exclusively in the textsessions config.toml as RepoConfig objects:
+          [[repos]]
+          path = "/Users/projects/personal/paperworlds/textworkspace"
+          label = "textworkspace"
+          profile = "personal"
+        Config is loaded via textsessions.config.load() -> Config with .repos: list[RepoConfig].
+        RepoConfig has: path (Path), label (str), profile (str).
+        The state YAML key per entry is a session ID; the file name encodes the repo key.
+        DESIGN CHANGE: textsessions repos must read config.toml, not state YAML files.
 
     - id: U02
       question: "Does textaccounts.list_profiles() return list[str] or list[dict]? Confirm shape for pick-list code."
-      answer: "[to be filled by T00 — grep the textaccounts repo]"
+      answer: "list[str] — returns sorted(registry.profiles.keys()). Plain strings, no dicts."
 
     - id: U03
       question: "Are there textsessions entries without a project field (older or malformed)? How to handle them on import?"
-      answer: "[to be filled by T00 — inspect ~/.local/state/textsessions/*.yaml]"
+      answer: |
+        N/A — project field does not exist in session YAML. All repo paths come from
+        config.toml RepoConfig entries. Every RepoConfig always has a path field (required).
+        Ghost sessions (repo deleted from disk) are a separate concept tracked by is_ghost.
+        For tw repo import: emit REPO for all config repos regardless of disk existence (R07).
 
     - id: U04
       question: "Does textsessions CLI use click? What's the pattern for adding a new subcommand like `textsessions repos`?"
-      answer: "[to be filled by T00 — read textsessions/src/textsessions/cli.py]"
+      answer: |
+        Yes, click. Top-level group: @click.group() def main(). Subcommands: @main.command().
+        Pattern to add repos:
+          @main.command("repos")
+          def repos_cmd() -> None:
+              """List all known repos."""
+              cfg = load()
+              for repo in cfg.repos:
+                  click.echo(f"REPO {repo.label} {repo.path} profile={repo.profile}")
 
   findings: |
-    [T00 logs here: anything surprising the implementer should know,
-     e.g. session files with alternative field names, malformed entries,
-     edge cases in path resolution.]
+    CRITICAL DESIGN CHANGE (T00): spec R05 assumed textsessions repos reads state YAML
+    files and extracts project paths. This is wrong. State YAML files contain no project
+    path. The source of truth is textsessions config.toml (RepoConfig list). The
+    textsessions repos implementation must call textsessions.config.load().repos instead.
+    This simplifies the implementation: no YAML parsing, no dedup needed (config already
+    has one entry per repo), and profile= metadata is available for free.
+
+    R06 (skip entries without project field) is now moot — drop it or repurpose.
+    textsessions_repos_impl pseudocode in design section must be replaced.
 
 # ---------------------------------------------------------------------------
 # REQUIREMENTS
@@ -85,14 +113,15 @@ requirements:
   # --- textsessions upstream ---
   - id: R05
     when: "`textsessions repos` is run"
-    shall: "read all state YAML files, extract each session's project path, deduplicate by resolved path, and emit REPO lines"
+    shall: "read repos from textsessions config.toml (config.load().repos), emit one `REPO <label> <path> profile=<profile>` line per RepoConfig entry, and exit 0"
+    note: "Confirmed by T00: project paths live in config.toml RepoConfig objects, NOT in state YAML files"
 
   - id: R06
-    when: "a textsessions entry has no project field or an empty project"
-    shall: "skip it silently without failing the command"
+    when: "`textsessions repos` is run and config.toml has no repos"
+    shall: "print nothing and exit 0"
 
   - id: R07
-    when: "a textsessions entry's project path does not exist on disk"
+    when: "a RepoConfig path does not exist on disk"
     shall: "still emit the REPO line — existence is a doctor concern, not an import concern"
 
   # --- tw repo import ---
@@ -221,27 +250,15 @@ design:
       - project: items = [r.path for r in cfg.repos.values()]  # show name+path in display, return path
 
   textsessions_repos_impl: |
-    def repos(ctx):
-        seen = {}  # path → (name, metadata)
-        for f in _TS_STATE_DIR.glob("*.yaml"):
-            if f.name.startswith("_"):
-                continue
-            with f.open() as fh:
-                data = yaml.safe_load(fh) or {}
-            for sid, info in data.items():
-                if not isinstance(info, dict):
-                    continue
-                project = info.get("project") or info.get("project_path") or ""
-                if not project:
-                    continue  # R06
-                resolved = str(Path(project).expanduser())
-                if resolved in seen:
-                    continue  # R05 dedup
-                name = Path(resolved).name or sid  # dir basename, fallback to session id
-                seen[resolved] = (name, {})
-        for path, (name, meta) in seen.items():
-            extra = " " + " ".join(f"{k}={v}" for k, v in meta.items()) if meta else ""
-            click.echo(f"REPO {name} {path}{extra}")
+    # Updated after T00: reads config.toml RepoConfig, not state YAML files.
+    @main.command("repos")
+    def repos_cmd() -> None:
+        """List all known repos (for tw repo import)."""
+        from textsessions.config import load as _load_cfg
+        cfg = _load_cfg()
+        for repo in cfg.repos:
+            meta = f" profile={repo.profile}" if repo.profile else ""
+            click.echo(f"REPO {repo.label} {repo.path}{meta}")
 
   conventions_md_addition: |
     Under a new heading "Project-tracking tools — CLI contract":
@@ -261,7 +278,7 @@ design:
 
     | Tool          | repos supported | notes                      |
     |---------------|-----------------|----------------------------|
-    | textsessions  | yes             | reads state/*.yaml         |
+    | textsessions  | yes             | reads config.toml repos    |
     | textprompts   | planned         | same contract when built   |
     ```
 
@@ -275,7 +292,7 @@ tasks:
     name: explore-tool-internals
     mode: explore
     satisfies: []
-    status: pending  # LEAD only
+    status: done  # LEAD only — answers filled in above
     checkpoint: true
     do: |
       Answer U01-U04. Read:
