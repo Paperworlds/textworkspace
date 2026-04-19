@@ -140,12 +140,22 @@ versioning:
   version_string_format: "<tool>, version X.Y.Z (githash)"
 
   python_pattern: |
-    # __init__.py — read from package metadata, never hardcode
+    # __init__.py — read from package metadata, never hardcode.
+    # Fallback: hatchling editable installs on Python 3.13 do not generate dist-info
+    # in the uv tool venv, so importlib.metadata raises PackageNotFoundError.
+    # Read pyproject.toml directly as a secondary fallback so `--version` stays correct.
     from importlib.metadata import version, PackageNotFoundError
     try:
         __version__ = version("<package>")
     except PackageNotFoundError:
-        __version__ = "unknown"
+        try:
+            from pathlib import Path
+            import re as _re
+            _pyproject = Path(__file__).parent.parent.parent / "pyproject.toml"
+            _m = _re.search(r'^version\s*=\s*"([^"]+)"', _pyproject.read_text(), _re.MULTILINE)
+            __version__ = _m.group(1) if _m else "unknown"
+        except Exception:
+            __version__ = "unknown"
 
     # cli.py — append git hash
     import subprocess
