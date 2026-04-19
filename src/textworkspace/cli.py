@@ -618,6 +618,27 @@ def _dev_repo_path(cfg: Any, tool_name: str) -> str | None:
     return str(candidate)
 
 
+def _repo_up_to_date(repo_path: str, tool_entry: Any) -> bool:
+    """Return True if the stored version hash matches the repo's current HEAD."""
+    if not tool_entry or not tool_entry.version:
+        return False
+    # Stored format: "X.Y.Z (hash)" or just "X.Y.Z"
+    m = re.search(r"\((\w+)\)", tool_entry.version)
+    if not m:
+        return False
+    stored_hash = m.group(1)
+    try:
+        head = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_path,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return head == stored_hash
+    except Exception:
+        return False
+
+
 def _tool_version(name: str, bin_path: str | None) -> str:
     """Get installed version string from binary --version output."""
     if not bin_path:
@@ -736,6 +757,11 @@ def dev_reinstall() -> None:
             click.echo(f"  {name}: skipping (not found)")
             continue
 
+        if _repo_up_to_date(repo_path, cfg.tools.get(name)):
+            stored = cfg.tools[name].version
+            click.echo(f"  {name}: up to date  {stored}")
+            continue
+
         cmd = ["uv", "tool", "install", "-e", repo_path, "--force"]
         for dep in _PYTHON_TOOL_DEPS.get(name, []):
             dep_path = resolved_root / dep
@@ -759,6 +785,11 @@ def dev_reinstall() -> None:
         repo_path = _dev_repo_path(cfg, go_tool)
         if not repo_path or not Path(repo_path).exists():
             click.echo(f"  {go_tool}: skipping (not found in dev_root)")
+            continue
+
+        if _repo_up_to_date(repo_path, cfg.tools.get(go_tool)):
+            stored = cfg.tools[go_tool].version
+            click.echo(f"  {go_tool}: up to date  {stored}")
             continue
 
         # Prefer `just <recipe>` if just is available, else fall back to make
