@@ -2328,6 +2328,28 @@ def workspaces_status() -> None:
 
 
 @workspaces_cmd.command("add")
+def _prompt_pick_list(items: list[str], prompt: str, allow_freetext: bool = True) -> str:
+    """Show a numbered pick-list and return the chosen value.
+
+    If items is empty, falls back to a plain free-text prompt.
+    Typing a valid number selects that item; any other input is accepted as
+    free-text (when allow_freetext is True).
+    """
+    if not items:
+        return click.prompt(prompt, default="")
+    click.echo(f"{prompt}:")
+    for i, item in enumerate(items, 1):
+        click.echo(f"  {i}) {item}")
+    if allow_freetext:
+        click.echo("  or type a value directly")
+    raw = click.prompt("  choice", default="").strip()
+    if raw.isdigit():
+        idx = int(raw) - 1
+        if 0 <= idx < len(items):
+            return items[idx]
+    return raw
+
+
 def workspaces_add() -> None:
     """Add a new workspace interactively."""
     from textworkspace.config import ServersConfig, WorkspaceConfig
@@ -2338,8 +2360,30 @@ def workspaces_add() -> None:
     if name in cfg.workspaces:
         click.echo(f"warning: workspace '{name}' already exists — it will be overwritten")
     description = click.prompt("Description", default="")
-    profile = click.prompt("Profile (textaccounts profile name)")
-    project = click.prompt("Project path (optional)", default="")
+
+    # Profile — pick-list from textaccounts if available (R15, R17)
+    profile_choices: list[str] = []
+    if _HAS_TEXTACCOUNTS:
+        try:
+            profile_choices = list_profiles()
+        except Exception:
+            pass
+    profile = _prompt_pick_list(profile_choices, "Profile") if profile_choices else click.prompt("Profile (textaccounts profile name)")
+
+    # Project — pick-list from known repos (R16)
+    repo_items = [f"{n}  ({r.path})" for n, r in cfg.repos.items()]
+    repo_paths = [r.path for r in cfg.repos.values()]
+    if repo_items:
+        choice = _prompt_pick_list(repo_items, "Project path (optional)", allow_freetext=True)
+        # If user picked a number, resolve to the path; otherwise use as-is
+        if choice in repo_items:
+            idx = repo_items.index(choice)
+            project = repo_paths[idx]
+        else:
+            project = choice
+    else:
+        project = click.prompt("Project path (optional)", default="")
+
     default_session_name = click.prompt("Default session name (optional)", default="")
 
     srv_type = click.prompt("Servers by (tags/names/none)", default="none")
