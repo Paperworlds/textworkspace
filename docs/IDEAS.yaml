@@ -608,26 +608,30 @@ developer_workflow:
           Unified append-only action log across all agents and sessions.
           Every significant agent action (commit, forum post, pp run, textread)
           is logged to a single structured file. The source of truth for
-          "what did agents actually do."
-        storage: ~/.textread/audit.yaml   # or ~/.config/paperworlds/audit.yaml
+          "what did agents actually do." Enables plan-vs-actual comparison
+          against tw_actions playbooks.
+        storage: ~/.config/paperworlds/audit.jsonl   # JSONL — one entry per line
         entry_schema: |
-          - ts: "2026-04-18T10:32:00Z"
-            agent: "claude@textserve-abc123"   # or "human" or "pp"
-            session: "abc123"
-            repo: "textserve"
-            action: commit                      # commit | forum-post | pp-run | read | review
-            detail:
-              hash: "a1b2c3"
-              message: "feat: add token refresh"
-            tags: [textserve, auth]
+          {"ts": "2026-04-18T10:32:00Z", "agent": "claude@textserve-abc123",
+           "session": "abc123", "repo": "textserve",
+           "action": "tool-use",          # tool-use | commit | forum-post | pp-run | read
+           "tool": "Edit",                # Claude Code tool name (for tool-use entries)
+           "detail": {"file": "src/textserve/auth.go", "summary": "add token refresh"},
+           "tags": ["textserve", "auth"]}
+        collection_mechanism: >
+          Claude Code PostToolUse hook — fires after every tool call.
+          Hook script: tw audit append --from-hook "$CLAUDE_HOOK_PAYLOAD".
+          Zero agent overhead — hook runs in background, appends JSONL line.
+          Per-session files optional (tw audit --session abc123) for targeted replay.
         sources: >
-          tw hook (post-commit), pp (on task complete/blocked), textforums (on new post),
-          textread (on --save), tw review (on review complete). Each tool appends;
-          tw audit is the reader.
+          PostToolUse hook (all tool calls), tw hook post-commit, pp (task complete/blocked),
+          textforums (new post), textread (--save), tw review (review complete).
+          Each source appends; tw audit is the reader.
         usage:
           - "tw audit list [--repo textserve] [--since 7d] [--action commit]"
           - "tw audit tail   # live feed, like tail -f"
           - "tw audit export --format md --since 2026-04-14"
+          - "tw audit diff --plan start-session --session abc123  # plan vs actual"
 
       tw_review:
         description: >
@@ -663,9 +667,36 @@ developer_workflow:
           are conversation-scoped. Playbooks fill the gap: short, named sequences
           for recurring lead workflows (start-session, post-task cleanup, daily
           standup) that any agent or human can invoke without context.
+        subgraph_model: >
+          An action spec is not a flat step list — it is a typed task subgraph.
+          When a task is planned, the chain of steps is known, and each step maps
+          to a chain of specific tool invocations. That mapping is not implicit;
+          it can be made explicit in the spec. Bound to each step are two things:
+          (1) permissions — what tools/actions the agent is allowed to use in
+          this context (e.g. may read files, may NOT push to remote); and
+          (2) recommendations — conventions and constraints that apply (e.g.
+          "prefer Edit over Bash for file changes", "commit after each logical
+          unit"). Together, these define the full intended subgraph of a subagent
+          doing one task — not just what to do, but within what envelope.
+          This model makes action specs textmap-compatible: a playbook is a
+          subgraph template that can be stored as nodes+edges in the map,
+          queried by tool type, and compared against what the agent actually did
+          (via tw_audit) to close the plan-vs-actual loop.
+        permissions_model: |
+          permissions:
+            allow: [Read, Edit, Write, Bash, Grep, Glob]
+            restrict: [Bash push, Bash rm -rf]    # patterns, not just tool names
+            require_confirm: [git push, gh pr create]
+          recommendations:
+            - "Prefer Edit over Bash for file changes"
+            - "Commit after each logical unit — do not accumulate"
+            - "Run tests before committing if tests exist"
         schema: |
           name: start-session
           description: "Orient at the start of any new work session."
+          permissions:
+            allow: [Read, Bash]
+            restrict: []
           steps:
             - run: tw brief --format md
             - run: textforums list --status open
@@ -685,6 +716,11 @@ developer_workflow:
           - start-session    # brief + forums + status
           - post-task        # audit commit + close forums thread if resolved
           - daily-review     # tw review --since yesterday
+        relation_to_textmap: >
+          Once textmap exists: a playbook can be stored as a subgraph template
+          (Plan node → Step nodes → Tool nodes, with Permission and Recommendation
+          edges). tw review can then query "planned tools vs actual tools" as a
+          graph diff — structural divergence surfaces without parsing free text.
 
 quality:
   - name: textbench
