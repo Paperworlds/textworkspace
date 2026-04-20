@@ -17,6 +17,7 @@ from textworkspace.forums import (
     forums,
     get_author,
     get_root,
+    list_tags,
     list_threads,
     load_thread,
     save_thread,
@@ -552,3 +553,74 @@ def test_forums_search_with_status_filter_cli(tmp_path):
     result = runner.invoke(forums, ["search", "bug", "--status", "open"])
     assert result.exit_code == 0, result.output
     assert "No matches found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# test_list_tags
+# ---------------------------------------------------------------------------
+
+def test_list_tags_empty_root(tmp_path):
+    """list_tags returns empty list for nonexistent root."""
+    result = list_tags(tmp_path / "nonexistent")
+    assert result == []
+
+
+def test_list_tags_no_tags(tmp_path):
+    """list_tags returns empty list when threads have no tags."""
+    _make_and_save(tmp_path, "thread-a", "open", [])
+    _make_and_save(tmp_path, "thread-b", "open", [])
+    result = list_tags(tmp_path)
+    assert result == []
+
+
+def test_list_tags_collects_unique_tags(tmp_path):
+    """list_tags collects and deduplicates tags from all threads."""
+    _make_and_save(tmp_path, "thread-a", "open", ["python", "dev"])
+    _make_and_save(tmp_path, "thread-b", "open", ["rust", "dev"])
+    _make_and_save(tmp_path, "thread-c", "open", ["python"])
+    result = list_tags(tmp_path)
+    assert result == ["dev", "python", "rust"]  # sorted
+
+
+def test_list_tags_sorted(tmp_path):
+    """list_tags returns tags in alphabetical order."""
+    _make_and_save(tmp_path, "thread-a", "open", ["zebra", "apple", "monkey"])
+    result = list_tags(tmp_path)
+    assert result == ["apple", "monkey", "zebra"]
+
+
+# ---------------------------------------------------------------------------
+# test_forums_tags command
+# ---------------------------------------------------------------------------
+
+def test_forums_tags_shows_tags(tmp_path):
+    """forums tags command displays all unique tags."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Python Post", "--tag", "python", "--tag", "dev", "--content", "content"])
+    runner.invoke(forums, ["new", "--title", "Rust Post", "--tag", "rust", "--tag", "dev", "--content", "content"])
+    result = runner.invoke(forums, ["tags"])
+    assert result.exit_code == 0, result.output
+    assert "dev" in result.output
+    assert "python" in result.output
+    assert "rust" in result.output
+
+
+def test_forums_tags_no_tags(tmp_path):
+    """forums tags command shows message when no tags exist."""
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, ["tags"])
+    assert result.exit_code == 0, result.output
+    assert "No tags found" in result.output
+
+
+def test_forums_tags_sorted_output(tmp_path):
+    """forums tags command outputs tags in sorted order."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--tag", "zebra", "--content", "c"])
+    runner.invoke(forums, ["new", "--title", "B", "--tag", "apple", "--content", "c"])
+    result = runner.invoke(forums, ["tags"])
+    assert result.exit_code == 0, result.output
+    # Find positions of each tag in output
+    output_lines = result.output.strip().split("\n")
+    assert output_lines[0] == "apple"
+    assert output_lines[1] == "zebra"

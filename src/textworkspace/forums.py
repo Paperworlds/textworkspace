@@ -247,6 +247,25 @@ def search_threads(root: Path, query: str, status: str | None = None) -> list[tu
     return results
 
 
+def list_tags(root: Path) -> list[str]:
+    """Return all unique tags from all threads, sorted alphabetically."""
+    tags_set: set[str] = set()
+    if not root.exists():
+        return []
+
+    for slug_dir in root.iterdir():
+        thread_file = slug_dir / _THREAD_FILE
+        if not (slug_dir.is_dir() and thread_file.exists()):
+            continue
+        try:
+            thread = load_thread(root, slug_dir.name)
+            tags_set.update(thread.meta.tags)
+        except Exception:
+            continue
+
+    return sorted(tags_set)
+
+
 # ---------------------------------------------------------------------------
 # Editor helper
 # ---------------------------------------------------------------------------
@@ -339,9 +358,12 @@ def forums_new(title: str, tags: tuple[str, ...], author: str | None, content: s
     thread = Thread(meta=meta, entries=[], path=thread_dir / _THREAD_FILE)
 
     if content is None:
+        existing_tags = list_tags(root)
+        tag_suggestions = f"# Available tags: {', '.join(existing_tags)}\n" if existing_tags else "# No tags yet.\n"
         template = (
             f"# New entry for: {title}\n"
             f"# Author: {author}\n"
+            f"{tag_suggestions}"
             "# Write your entry below this line:\n\n"
         )
         content = _open_in_editor(template).strip()
@@ -415,9 +437,12 @@ def forums_add(slug: str, content: str | None, author: str | None, status: str, 
     author = get_author(author)
 
     if content is None:
+        existing_tags = list_tags(root)
+        tag_suggestions = f"# Available tags: {', '.join(existing_tags)}\n" if existing_tags else "# No tags yet.\n"
         template = (
             f"# Adding entry to: {slug}\n"
             f"# Author: {author}\n"
+            f"{tag_suggestions}"
             "# Write your entry below this line:\n\n"
         )
         content = _open_in_editor(template).strip()
@@ -525,3 +550,20 @@ def forums_search(query: str, status: str | None) -> None:
 
         match_str = ", ".join(match_types)
         click.echo(f"{slug:<35} {match_str:<20}  {thread.meta.title}")
+
+
+# ---------------------------------------------------------------------------
+# forums tags
+# ---------------------------------------------------------------------------
+
+@forums.command("tags")
+def forums_tags() -> None:
+    """List all existing tags."""
+    root = get_root()
+    tags = list_tags(root)
+    if not tags:
+        click.echo("No tags found.")
+        return
+
+    for tag in tags:
+        click.echo(tag)
