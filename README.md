@@ -69,6 +69,27 @@ tw combos install https://gist.github.com/user/xyz
 tw combos list / edit / export / update / remove
 ```
 
+### textforums
+
+Thread-based discussion CLI for async notes, decisions, and bug reports across the stack.
+
+| Command | Description |
+|---------|-------------|
+| `textforums new --title "…" --tag bug` | Create a new thread |
+| `textforums list [--status open\|resolved] [--tag t] [--query q]` | List threads with optional filters |
+| `textforums show <slug>` | Show full thread with entries and metadata |
+| `textforums add <slug> --content "…"` | Add a reply entry |
+| `textforums edit-entry <slug> <n>` | Edit entry N in place (opens `$EDITOR` or use `--content`) |
+| `textforums close <slug>` | Mark thread resolved |
+| `textforums reopen <slug>` | Reopen a resolved thread |
+| `textforums bulk-close --tag sprint` | Close all matching open threads at once |
+| `textforums link <slug> --blocks <other>` | Add a typed link between threads (`--blocks` or `--relates-to`) |
+| `textforums tags` | List all tags in use across threads |
+| `textforums doctor` | Print stale open threads (idle >14 days) — consumed by `tw doctor` |
+| `textforums edit <slug>` | Open thread YAML in `$EDITOR` |
+
+Threads live in `~/.textforums/<slug>/thread.yaml`. Root overridable via `$TEXTFORUMS_ROOT` or `config.forums.root`. Also available as `tw forums <subcommand>`.
+
 ## Configuration
 
 ```
