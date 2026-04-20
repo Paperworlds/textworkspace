@@ -35,6 +35,32 @@ tw shell install --fish   # or --bash / --zsh
 | `tw which <tool>` | Print path of a managed binary |
 | `tw dev install` | Reinstall all dev tools from local repos (editable) |
 
+### Workspaces
+
+A workspace is a named join of profile + servers + project. One command to switch context.
+
+```bash
+tw start data              # switch profile, start servers, open session
+tw start data my-session   # same, with a custom session name
+tw stop data               # stop workspace servers
+tw workspaces list         # show all configured workspaces
+tw workspaces status       # show active workspace
+tw workspaces add          # add a new workspace interactively
+tw workspaces edit         # open config.yaml in $EDITOR
+```
+
+Config in `~/.config/paperworlds/config.yaml`:
+
+```yaml
+workspaces:
+  data:
+    description: "Data work"
+    profile: work
+    servers:
+      tags: [data]
+    project: ~/projects/data
+```
+
 ### Combos
 
 Combos are YAML workflow recipes stored in `~/.config/paperworlds/combos.yaml` or `combos.d/`.
