@@ -12,7 +12,6 @@ defaults:
   budget_usd: 1.50
   max_turns: 100
   profile: personal
-  claude_cmd: claude-personal
 
 max_parallel: 1
 total_budget_usd: 25.00
