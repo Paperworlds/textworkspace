@@ -225,6 +225,31 @@ def add_entry(thread: Thread, entry: Entry, files: list[Path] | None = None) -> 
     save_thread(thread)
 
 
+def edit_entry(thread: Thread, index: int, content: str | None = None, status: str | None = None) -> None:
+    """Edit an entry's content and/or status by index. Open editor if content is None."""
+    if index < 0 or index >= len(thread.entries):
+        raise IndexError(f"Entry index {index} out of range (thread has {len(thread.entries)} entries)")
+
+    entry = thread.entries[index]
+
+    # Edit content if provided or open editor
+    if content is None:
+        template = (
+            f"# Editing entry [{index}] by {entry.author}\n"
+            f"# Timestamp: {entry.timestamp}\n"
+            "# Write your edited content below this line:\n\n"
+            f"{entry.content}\n"
+        )
+        edited = _open_in_editor(template).strip()
+        lines = [l for l in edited.splitlines() if not l.startswith("#")]
+        content = "\n".join(lines).strip()
+
+    entry.content = content
+    if status is not None:
+        entry.status = status
+    save_thread(thread)
+
+
 def search_threads(root: Path, query: str, status: str | None = None) -> list[tuple[Thread, list[int]]]:
     """Search threads by title, entry content, and tags. Returns (thread, matching_entry_indices)."""
     query_lower = query.lower()
@@ -580,6 +605,30 @@ def forums_edit(slug: str) -> None:
         raise click.ClickException(f"Thread '{slug}' not found.")
     editor = os.environ.get("EDITOR", "vi")
     subprocess.run([editor, str(thread_file)], check=True)
+
+
+# ---------------------------------------------------------------------------
+# forums edit-entry
+# ---------------------------------------------------------------------------
+
+@forums.command("edit-entry")
+@click.argument("slug")
+@click.argument("index", type=int)
+@click.option("--content", "-c", default=None, help="New entry content. Opens $EDITOR if omitted.")
+@click.option("--status", "-s", default=None, help="New entry status.")
+def forums_edit_entry(slug: str, index: int, content: str | None, status: str | None) -> None:
+    """Edit a specific entry by index without touching the whole file."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    try:
+        edit_entry(thread, index, content=content, status=status)
+        click.echo(f"Entry [{index}] in '{slug}' updated.")
+    except IndexError as e:
+        raise click.ClickException(str(e))
 
 
 # ---------------------------------------------------------------------------

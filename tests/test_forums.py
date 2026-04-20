@@ -15,6 +15,7 @@ from textworkspace.forums import (
     ThreadMeta,
     add_entry,
     cli,
+    edit_entry,
     forums,
     get_author,
     get_root,
@@ -1104,3 +1105,191 @@ def test_forums_doctor_ignores_resolved_threads(tmp_path):
     result = runner.invoke(forums, ["doctor"])
     assert result.exit_code == 0
     assert "STALE" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# edit_entry — core function
+# ---------------------------------------------------------------------------
+
+def test_edit_entry_updates_content(tmp_path):
+    """edit_entry modifies entry content and saves."""
+    thread = _make_thread(tmp_path)
+    save_thread(thread)
+
+    edit_entry(thread, 0, content="Updated content")
+
+    loaded = load_thread(tmp_path, "test-thread")
+    assert loaded.entries[0].content == "Updated content"
+    assert loaded.entries[0].author == "alice"  # preserved
+    assert loaded.entries[0].timestamp == "2026-04-14T10:01:00Z"  # preserved
+
+
+def test_edit_entry_updates_status(tmp_path):
+    """edit_entry can update entry status."""
+    thread = _make_thread(tmp_path)
+    save_thread(thread)
+
+    edit_entry(thread, 0, content="Content stays", status="resolved")
+
+    loaded = load_thread(tmp_path, "test-thread")
+    assert loaded.entries[0].status == "resolved"
+    assert loaded.entries[0].content == "Content stays"
+
+
+def test_edit_entry_by_index(tmp_path):
+    """edit_entry correctly identifies entries by index."""
+    meta = ThreadMeta(
+        title="Multi Entry",
+        created="2026-04-14T00:00:00Z",
+        author="alice",
+        tags=[],
+        status="open",
+    )
+    entry1 = Entry(author="alice", timestamp="2026-04-14T10:00:00Z", status="", content="First")
+    entry2 = Entry(author="bob", timestamp="2026-04-14T11:00:00Z", status="reply", content="Second")
+    entry3 = Entry(author="carol", timestamp="2026-04-14T12:00:00Z", status="", content="Third")
+    path = tmp_path / "multi" / "thread.yaml"
+    thread = Thread(meta=meta, entries=[entry1, entry2, entry3], path=path)
+    save_thread(thread)
+
+    # Edit middle entry (index 1)
+    edit_entry(thread, 1, content="Updated second")
+
+    loaded = load_thread(tmp_path, "multi")
+    assert loaded.entries[0].content == "First"
+    assert loaded.entries[1].content == "Updated second"
+    assert loaded.entries[1].author == "bob"
+    assert loaded.entries[2].content == "Third"
+
+
+def test_edit_entry_index_out_of_range(tmp_path):
+    """edit_entry raises IndexError for invalid index."""
+    thread = _make_thread(tmp_path)
+    save_thread(thread)
+
+    with pytest.raises(IndexError):
+        edit_entry(thread, 99, content="Content")
+
+    with pytest.raises(IndexError):
+        edit_entry(thread, -10, content="Content")
+
+
+def test_edit_entry_negative_index_fails(tmp_path):
+    """edit_entry does not support negative indices."""
+    thread = _make_thread(tmp_path)
+    save_thread(thread)
+
+    with pytest.raises(IndexError):
+        edit_entry(thread, -1, content="Content")
+
+
+# ---------------------------------------------------------------------------
+# forums edit-entry CLI
+# ---------------------------------------------------------------------------
+
+def test_forums_edit_entry_with_content(tmp_path):
+    """forums edit-entry updates an entry with provided content."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Edit Test", "--content", "original"])
+    runner.invoke(forums, ["add", "edit-test", "--content", "second entry"])
+
+    result = runner.invoke(forums, ["edit-entry", "edit-test", "0", "--content", "updated"])
+    assert result.exit_code == 0, result.output
+    assert "updated" in result.output
+
+    thread = load_thread(tmp_path, "edit-test")
+    assert thread.entries[0].content == "updated"
+    assert thread.entries[1].content == "second entry"
+
+
+def test_forums_edit_entry_with_status(tmp_path):
+    """forums edit-entry can update entry status."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Status Test", "--content", "original"])
+
+    result = runner.invoke(forums, ["edit-entry", "status-test", "0", "--status", "acknowledged"])
+    assert result.exit_code == 0, result.output
+
+    thread = load_thread(tmp_path, "status-test")
+    assert thread.entries[0].status == "acknowledged"
+
+
+def test_forums_edit_entry_combined_content_and_status(tmp_path):
+    """forums edit-entry can update both content and status."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Both", "--content", "original"])
+
+    result = runner.invoke(forums, ["edit-entry", "both", "0", "--content", "updated", "--status", "fixed"])
+    assert result.exit_code == 0, result.output
+
+    thread = load_thread(tmp_path, "both")
+    assert thread.entries[0].content == "updated"
+    assert thread.entries[0].status == "fixed"
+
+
+def test_forums_edit_entry_thread_not_found(tmp_path):
+    """forums edit-entry fails gracefully when thread doesn't exist."""
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, ["edit-entry", "nonexistent", "0", "--content", "text"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+def test_forums_edit_entry_invalid_index(tmp_path):
+    """forums edit-entry fails when entry index is out of range."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Index Test", "--content", "only one"])
+
+    result = runner.invoke(forums, ["edit-entry", "index-test", "99", "--content", "text"])
+    assert result.exit_code != 0
+    assert "out of range" in result.output or "IndexError" in result.output
+
+
+def test_forums_edit_entry_opens_editor_without_content(tmp_path):
+    """forums edit-entry opens editor when --content is omitted."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Editor Test", "--content", "before"])
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = None
+        # Mock the editor to return modified content
+        with patch("textworkspace.forums._open_in_editor") as mock_editor:
+            mock_editor.return_value = "# Some comment\nedited via editor\n"
+            result = runner.invoke(forums, ["edit-entry", "editor-test", "0"])
+
+    assert result.exit_code == 0, result.output
+    thread = load_thread(tmp_path, "editor-test")
+    assert thread.entries[0].content == "edited via editor"
+
+
+def test_forums_edit_entry_preserves_metadata(tmp_path):
+    """forums edit-entry preserves author, timestamp, and other fields."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Preserve", "--content", "original"])
+
+    thread = load_thread(tmp_path, "preserve")
+    original_author = thread.entries[0].author
+    original_timestamp = thread.entries[0].timestamp
+
+    runner.invoke(forums, ["edit-entry", "preserve", "0", "--content", "new content"])
+
+    loaded = load_thread(tmp_path, "preserve")
+    assert loaded.entries[0].author == original_author
+    assert loaded.entries[0].timestamp == original_timestamp
+    assert loaded.entries[0].content == "new content"
+
+
+def test_forums_edit_entry_multiple_entries(tmp_path):
+    """forums edit-entry correctly edits one entry among many."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Multi", "--content", "entry 0"])
+    runner.invoke(forums, ["add", "multi", "--content", "entry 1"])
+    runner.invoke(forums, ["add", "multi", "--content", "entry 2"])
+
+    result = runner.invoke(forums, ["edit-entry", "multi", "1", "--content", "modified entry 1"])
+    assert result.exit_code == 0, result.output
+
+    thread = load_thread(tmp_path, "multi")
+    assert thread.entries[0].content == "entry 0"
+    assert thread.entries[1].content == "modified entry 1"
+    assert thread.entries[2].content == "entry 2"
