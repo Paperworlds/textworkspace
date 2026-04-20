@@ -208,6 +208,45 @@ def add_entry(thread: Thread, entry: Entry, files: list[Path] | None = None) -> 
     save_thread(thread)
 
 
+def search_threads(root: Path, query: str, status: str | None = None) -> list[tuple[Thread, list[int]]]:
+    """Search threads by title, entry content, and tags. Returns (thread, matching_entry_indices)."""
+    query_lower = query.lower()
+    results: list[tuple[Thread, list[int]]] = []
+
+    if not root.exists():
+        return results
+
+    for slug_dir in sorted(root.iterdir()):
+        thread_file = slug_dir / _THREAD_FILE
+        if not (slug_dir.is_dir() and thread_file.exists()):
+            continue
+        try:
+            thread = load_thread(root, slug_dir.name)
+        except Exception:
+            continue
+
+        if status is not None and thread.meta.status != status:
+            continue
+
+        # Check if query matches title
+        title_match = query_lower in thread.meta.title.lower()
+
+        # Check if query matches any tag
+        tag_match = any(query_lower in tag.lower() for tag in thread.meta.tags)
+
+        # Check if query matches any entry content
+        matching_entries: list[int] = []
+        for i, entry in enumerate(thread.entries):
+            if query_lower in entry.content.lower():
+                matching_entries.append(i)
+
+        # Include thread if there's any match
+        if title_match or tag_match or matching_entries:
+            results.append((thread, matching_entries))
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Editor helper
 # ---------------------------------------------------------------------------
@@ -448,3 +487,41 @@ def forums_reopen(slug: str) -> None:
     thread.meta.status = "open"
     save_thread(thread)
     click.echo(f"Thread '{slug}' reopened.")
+
+
+# ---------------------------------------------------------------------------
+# forums search
+# ---------------------------------------------------------------------------
+
+@forums.command("search")
+@click.argument("query")
+@click.option("--status", "-s", default=None, help="Filter by status (open/resolved).")
+def forums_search(query: str, status: str | None) -> None:
+    """Search threads by title, content, and tags."""
+    root = get_root()
+    results = search_threads(root, query, status=status)
+
+    if not results:
+        click.echo("No matches found.")
+        return
+
+    # Table header
+    header = f"{'SLUG':<35} {'MATCH TYPE':<20}  TITLE"
+    click.echo(header)
+    click.echo("-" * len(header))
+
+    for thread, matching_entries in results:
+        slug = thread.path.parent.name
+        match_types: list[str] = []
+
+        # Determine what matched
+        query_lower = query.lower()
+        if query_lower in thread.meta.title.lower():
+            match_types.append("title")
+        if any(query_lower in tag.lower() for tag in thread.meta.tags):
+            match_types.append(f"tag:{','.join(t for t in thread.meta.tags if query_lower in t.lower())}")
+        if matching_entries:
+            match_types.append(f"entries({len(matching_entries)})")
+
+        match_str = ", ".join(match_types)
+        click.echo(f"{slug:<35} {match_str:<20}  {thread.meta.title}")

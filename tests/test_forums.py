@@ -20,6 +20,7 @@ from textworkspace.forums import (
     list_threads,
     load_thread,
     save_thread,
+    search_threads,
     slug_from_title,
     DEFAULT_ROOT,
 )
@@ -404,3 +405,150 @@ def test_tw_forums_subcommand(tmp_path):
     runner = CliRunner(env={"TEXTFORUMS_ROOT": str(tmp_path), "TEXTFORUMS_AUTHOR": "tester"})
     result = runner.invoke(main, ["forums", "list"])
     assert result.exit_code == 0, result.output
+
+
+# ---------------------------------------------------------------------------
+# test_search_threads — by title
+# ---------------------------------------------------------------------------
+
+def test_search_threads_by_title(tmp_path):
+    """Search finds threads by title."""
+    _make_and_save(tmp_path, "python-post", "open", [])
+    _make_and_save(tmp_path, "rust-post", "open", [])
+
+    results = search_threads(tmp_path, "python")
+    assert len(results) == 1
+    thread, _ = results[0]
+    assert "python" in thread.meta.title.lower()
+
+
+def test_search_threads_case_insensitive(tmp_path):
+    """Search is case-insensitive."""
+    _make_and_save(tmp_path, "test-thread", "open", [])
+
+    results_lower = search_threads(tmp_path, "test")
+    results_upper = search_threads(tmp_path, "TEST")
+    assert len(results_lower) == 1
+    assert len(results_upper) == 1
+
+
+# ---------------------------------------------------------------------------
+# test_search_threads — by content
+# ---------------------------------------------------------------------------
+
+def test_search_threads_by_content(tmp_path):
+    """Search finds threads by entry content."""
+    meta = ThreadMeta(
+        title="General Discussion",
+        created="2026-04-14T00:00:00Z",
+        author="x",
+        tags=[],
+        status="open",
+    )
+    entry1 = Entry(author="alice", timestamp="2026-04-14T00:00:00Z", status="", content="discussing algorithms")
+    entry2 = Entry(author="bob", timestamp="2026-04-14T01:00:00Z", status="", content="algorithms are cool")
+    thread = Thread(meta=meta, entries=[entry1, entry2], path=tmp_path / "general" / "thread.yaml")
+    save_thread(thread)
+
+    results = search_threads(tmp_path, "algorithms")
+    assert len(results) == 1
+    thread_result, matching_entries = results[0]
+    assert len(matching_entries) == 2
+    assert 0 in matching_entries
+    assert 1 in matching_entries
+
+
+# ---------------------------------------------------------------------------
+# test_search_threads — by tag
+# ---------------------------------------------------------------------------
+
+def test_search_threads_by_tag(tmp_path):
+    """Search finds threads by tag."""
+    _make_and_save(tmp_path, "python-post", "open", ["python", "dev"])
+    _make_and_save(tmp_path, "rust-post", "open", ["rust"])
+
+    results = search_threads(tmp_path, "python")
+    assert len(results) == 1
+    thread, _ = results[0]
+    assert "python" in thread.meta.tags
+
+
+def test_search_threads_partial_tag_match(tmp_path):
+    """Search matches partial tag text."""
+    _make_and_save(tmp_path, "thread-a", "open", ["debugging"])
+    _make_and_save(tmp_path, "thread-b", "open", ["logging"])
+
+    results = search_threads(tmp_path, "debug")
+    assert len(results) == 1
+    thread, _ = results[0]
+    assert "debug" in thread.meta.tags[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# test_search_threads — status filter
+# ---------------------------------------------------------------------------
+
+def test_search_threads_with_status_filter(tmp_path):
+    """Search respects status filter."""
+    meta1 = ThreadMeta(
+        title="Open Issue",
+        created="2026-04-14T00:00:00Z",
+        author="x",
+        tags=[],
+        status="open",
+    )
+    entry1 = Entry(author="alice", timestamp="2026-04-14T00:00:00Z", status="", content="bug report")
+    thread1 = Thread(meta=meta1, entries=[entry1], path=tmp_path / "open-issue" / "thread.yaml")
+    save_thread(thread1)
+
+    meta2 = ThreadMeta(
+        title="Closed Issue",
+        created="2026-04-14T00:00:00Z",
+        author="x",
+        tags=[],
+        status="resolved",
+    )
+    entry2 = Entry(author="bob", timestamp="2026-04-14T00:00:00Z", status="", content="bug report fixed")
+    thread2 = Thread(meta=meta2, entries=[entry2], path=tmp_path / "closed-issue" / "thread.yaml")
+    save_thread(thread2)
+
+    all_results = search_threads(tmp_path, "bug")
+    assert len(all_results) == 2
+
+    open_results = search_threads(tmp_path, "bug", status="open")
+    assert len(open_results) == 1
+    assert open_results[0][0].meta.status == "open"
+
+
+# ---------------------------------------------------------------------------
+# test_forums_search CLI
+# ---------------------------------------------------------------------------
+
+def test_forums_search_by_title_cli(tmp_path):
+    """CLI search finds threads by title."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Python Tutorial", "--content", "content"])
+    runner.invoke(forums, ["new", "--title", "Rust Guide", "--content", "content"])
+    result = runner.invoke(forums, ["search", "python"])
+    assert result.exit_code == 0, result.output
+    assert "python-tutorial" in result.output
+    assert "title" in result.output.lower()
+
+
+def test_forums_search_no_results_cli(tmp_path):
+    """CLI search shows 'No matches found' when no results."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Some Thread", "--content", "content"])
+    result = runner.invoke(forums, ["search", "nonexistent"])
+    assert result.exit_code == 0, result.output
+    assert "No matches found" in result.output
+
+
+def test_forums_search_with_status_filter_cli(tmp_path):
+    """CLI search respects --status filter."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Bug Report", "--content", "found a bug"])
+    runner.invoke(forums, ["close", "bug-report"])
+    result = runner.invoke(forums, ["search", "bug", "--status", "open"])
+    assert result.exit_code == 0, result.output
+    assert "No matches found" in result.output
