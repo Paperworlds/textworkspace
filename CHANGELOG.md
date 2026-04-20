@@ -5,6 +5,26 @@ All notable changes to textworkspace are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.4.1
+
+- `_tool_version` timeout raised from 3s to 15s — cold Python startup after a fresh `uv tool install --force` exceeds 3s, causing version to read as `unknown`
+- CI: GitHub Actions workflow runs `pytest` on every push and PR to `main`
+- Tests: regression tests for `_tool_version` (timeout returns `unknown`, version string parsing, `None` bin path)
+
+**Tests — 250 passing**
+
+| Area | Coverage | Notes |
+|---|---|---|
+| CLI commands | high | all prior coverage plus `_tool_version` unit tests |
+| Config load/save | high | round-trip, validation, field omission, YAML format |
+| Combo engine | high | load, run, conditions, options, dry-run, install, export, update, search |
+| Binary bootstrap | high | platform detection, download, checksum, symlink management, version pruning |
+| Forums | medium | new/list/show/add/close/reopen, slug generation, file attachments |
+| Shell generation | medium | fish/bash/zsh wrapper output, `tw shell install` |
+| Not covered | — | live subprocesses (textproxy, textserve, textaccounts) — mocked throughout |
+
+---
+
 ## v0.4.0
 
 Structured refactor pass — no behaviour changes.

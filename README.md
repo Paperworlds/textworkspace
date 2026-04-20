@@ -4,63 +4,52 @@
 
 One install, one CLI surface. Bootstraps tools, manages workflows, unifies status across the entire stack.
 
-## Quick Start
-
-### Install
+## Install
 
 ```bash
 pipx install textworkspace
-```
-
-### Initialize
-
-```bash
 tw init
 ```
 
-Walks you through onboarding: discovers existing tools, prompts for missing dependencies (textaccounts, textsessions, etc.), bootstraps Go binaries from GitHub releases.
-
-### Check status
+`tw init` discovers existing tools, prompts for missing dependencies, and bootstraps Go binaries from GitHub releases. To enable shell integration (required for `tw switch`):
 
 ```bash
-tw status
+tw shell install --fish   # or --bash / --zsh
 ```
 
-Shows unified stack view: active profile, proxy state, running servers, session count.
+## Usage
 
-## CLI Reference
+### Core commands
 
 | Command | Description |
 |---------|-------------|
-| `tw init` | Initialise textworkspace config and install dependencies |
-| `tw status` | Show unified status of all stack components |
-| `tw doctor` | Check that all required binaries and services are healthy |
-| `tw update [tool]` | Update all managed binaries and packages to latest versions |
-| `tw switch <profile>` | Switch the active workspace profile (requires fish wrapper) |
-| `tw sessions [query] [-n N]` | Launch or search textsessions with optional limit |
-| `tw stats [--session ID] [--port N]` | Show aggregate stats across sessions and accounts |
-| `tw serve [name] [--tag T] [--json]` | Start or inspect textserve servers |
-| `tw config` | Show or edit config file |
-| `tw which <tool>` | Print the path of a managed binary |
-| `tw combos` | Manage workflow combos |
-| `tw shell` | Output shell function definitions |
+| `tw init` | Initialise config and install dependencies |
+| `tw status` | Unified stack view: profile, proxy, servers, sessions |
+| `tw doctor` | Check all binaries and services are healthy |
+| `tw update [tool]` | Update managed binaries and packages to latest |
+| `tw switch <profile>` | Switch active workspace profile (requires shell wrapper) |
+| `tw sessions [query]` | Launch or search textsessions |
+| `tw stats` | Aggregate stats across sessions and accounts |
+| `tw serve [name]` | Start or inspect textserve servers |
+| `tw config show` | Print config as YAML |
+| `tw which <tool>` | Print path of a managed binary |
+| `tw dev install` | Reinstall all dev tools from local repos (editable) |
 
-## Combo Examples
+### Combos
 
-Combos are YAML-based workflow recipes that chain actions across tools. They're stored in `~/.config/paperworlds/combos.yaml` or `~/.config/paperworlds/combos.d/`.
-
-### Built-in combos
+Combos are YAML workflow recipes stored in `~/.config/paperworlds/combos.yaml` or `combos.d/`.
 
 ```bash
 tw up              # Start proxy and default servers
 tw down            # Stop all servers and proxy
 tw reset <profile> # Switch profile and restart stack
+tw <combo> [args]  # Run any custom combo by name
+tw --dry-run <combo>  # Preview steps without executing
 ```
 
-### Custom combo
+Define your own:
 
 ```yaml
-# In ~/.config/paperworlds/combos.yaml
 combos:
   workday:
     description: Start work environment
@@ -72,82 +61,23 @@ combos:
       - run: servers start --tag default
 ```
 
-Then run: `tw workday production`
-
-### Combo conditions
-
-- `proxy.running` / `proxy.stopped` — proxy state
-- `servers.running [--tag T / name]` / `servers.none_running` — server state
-- `accounts.active <profile>` — active profile
-
-### Combo execution
-
-```bash
-tw <combo-name> [args]      # Run combo (dynamic dispatch)
-tw --dry-run <combo-name>   # Preview steps without executing
-tw <combo-name> --continue  # Continue on errors (stop at first failure is default)
-```
-
-Combos are also available via `tw combos list`, and installed from community via `tw combos install`.
-Both dynamic dispatch (`tw workday`) and the `tw combos` namespace work.
-
-## Combo Sharing
-
-### Install from community
+Install from community:
 
 ```bash
 tw combos install gh:paperworlds/textcombos/workday
 tw combos install https://gist.github.com/user/xyz
-tw combos install ~/my-combos.yaml
+tw combos list / edit / export / update / remove
 ```
-
-### Export a combo
-
-```bash
-tw combos export <name>      # Dump to stdout
-tw combos export --all       # Export all combos
-```
-
-### Search community
-
-```bash
-tw combos search "build"
-tw combos info <name>
-```
-
-### Manage installed combos
-
-```bash
-tw combos list              # List all combos
-tw combos edit              # Edit combos.yaml
-tw combos add <name>        # Create new combo interactively
-tw combos update            # Re-fetch from installed sources
-tw combos remove <name>     # Delete a combo
-```
-
-## Fish Shell Setup
-
-Automatic on `tw init`, or manually:
-
-```bash
-tw shell --fish >> ~/.config/fish/conf.d/paperworlds.fish
-source ~/.config/fish/conf.d/paperworlds.fish
-```
-
-This creates:
-- `tw` — main wrapper (handles `tw switch` for env setting)
-- `xtw` — alias for `tw`
-- `xta`, `xts`, `xtp`, `xtg` — aliases for `ta`, `ts`, `tp`, `tg`
 
 ## Configuration
 
-### Config file
-
 ```
-~/.config/paperworlds/config.yaml
+~/.config/paperworlds/config.yaml   # tools, versions, defaults
+~/.config/paperworlds/combos.yaml   # user combos
+~/.config/paperworlds/combos.d/     # community combos
 ```
 
-Tracks installed tools, versions, binary paths, and preferences:
+Schema excerpt:
 
 ```yaml
 tools:
@@ -163,47 +93,30 @@ defaults:
   proxy_autostart: false
 ```
 
-### Combos
+## How it works
 
-```
-~/.config/paperworlds/combos.yaml       # User's own combos
-~/.config/paperworlds/combos.d/         # Community combos installed by tw
-```
+`tw init` interrogates the system for each known tool — Python packages via `uv`, Go binaries via GitHub Releases — and records versions and binary paths in `config.yaml`. On subsequent runs, `tw doctor` re-checks each binary and flags drift.
 
-Inspect/edit:
+Go tools (textproxy, textserve) are fetched as pre-built archives and unpacked into `~/.local/share/textworkspace/bin/`. A symlink points to the active version; old versions are kept for rollback. Archives follow the naming convention `<tool>-v<version>-<os>-<arch>.tar.gz` and are verified against a `.sha256` sidecar.
 
-```bash
-tw config show              # Print config as YAML
-tw config edit              # Open in $EDITOR
-tw combos list              # List all combos
-tw combos edit              # Open combos.yaml in $EDITOR
-```
+Combos are loaded at startup from all YAML files in `combos.yaml` and `combos.d/`. Each combo declares steps using a small DSL: `run` (shell command via the tool's own CLI), `skip_if` (condition expression), and `args` (named positional arguments). Dynamic dispatch means any combo name becomes a top-level `tw` subcommand.
 
-## Supported Tools
+Shell integration works by writing fish/bash/zsh wrapper functions via `tw shell install`. The wrappers handle commands that modify shell state (`tw switch`, `ta switch`) which cannot work as subprocess calls.
 
-### Required
-- **textaccounts** — account/profile management (Python, via `pipx`)
-- **textsessions** — session indexing and TUI (Python, via `pipx`)
+`tw dev install` builds every tool from local repo checkouts in editable mode (`uv tool install -e`), then records the git hash in the version string so `tw doctor` can detect stale installs without re-running the install.
 
-### Optional Go tools (auto-bootstrapped)
-- **textproxy** — proxy server for tool coordination
-- **textserve** — MCP fleet/server runner
-- **textmap** — graph engine (planned)
+## Roadmap
 
-## Advanced: Binary Bootstrap
+- [ ] `tw repo move <name> <new-path>` — orchestrate path updates across all tools when a repo moves
+- [ ] `tw doctor` — aggregate `STALE` lines from each tool's own `doctor` command
+- [ ] `tw sync` — push repos from `config.yaml` into each tool's own config
+- [ ] `tw repo import` — pull repos from any tool that exposes `<tool> repos`
+- [ ] Publish to PyPI
 
-Go tools are fetched as pre-built binaries from GitHub releases:
+## Part of Paperworlds
 
-```
-~/.local/share/textworkspace/bin/
-├── textproxy → textproxy-v0.5.0-darwin-arm64
-├── textserve → textserve-v0.2.1-darwin-arm64
-└── textproxy-v0.4.0-darwin-arm64  # Previous version (for rollback)
-```
-
-Archives are named: `<tool>-v<version>-<os>-<arch>.tar.gz`
-
-Checksum verification via `.sha256` sidecar.
+textworkspace is part of [Paperworlds](https://github.com/paperworlds) — an open org
+building tools and games around AI agents and text interfaces.
 
 ## License
 
