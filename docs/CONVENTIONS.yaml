@@ -467,6 +467,32 @@ testing:
       - Combo conditions (proxy.running) require respective tools installed
 
 # ---------------------------------------------------------------------------
+# README STRUCTURE
+# ---------------------------------------------------------------------------
+
+readme:
+  required_sections:
+    - "# <tool>" # title + one-line description
+    - "## Install" # uv tool install + textread install for completions
+    - "## Usage" # key CLI examples
+    - "## Configuration" # config file path + schema snippet
+    - "## How it works" # prose explanation of the core flow
+    - "## Roadmap" # unchecked checkbox list of planned work
+    - "## Part of Paperworlds" # standard tail (see below)
+    - "## License" # Elastic License 2.0 for open tools
+
+  part_of_paperworlds: |
+    ## Part of Paperworlds
+
+    <tool> is part of [Paperworlds](https://github.com/paperworlds) — an open org
+    building tools and games around AI agents and text interfaces.
+
+  notes:
+    - Roadmap items use GitHub-flavoured markdown checkboxes (- [ ]).
+    - How it works explains the core flow in plain prose — no bullet lists.
+    - Part of Paperworlds and License are always the last two sections, in that order.
+
+# ---------------------------------------------------------------------------
 # CLAUDE SESSION CONVENTIONS
 # ---------------------------------------------------------------------------
 
