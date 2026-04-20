@@ -825,3 +825,121 @@ def test_forums_list_shows_link_count(tmp_path):
     result = runner.invoke(forums, ["list"])
     assert result.exit_code == 0, result.output
     assert "LINKS" in result.output
+
+
+# ---------------------------------------------------------------------------
+# forums bulk-close
+# ---------------------------------------------------------------------------
+
+def test_forums_bulk_close_closes_matching_threads(tmp_path):
+    """forums bulk-close closes all matching threads."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Thread One", "--tag", "bug", "--content", "open"])
+    runner.invoke(forums, ["new", "--title", "Thread Two", "--tag", "bug", "--content", "open"])
+    runner.invoke(forums, ["new", "--title", "Thread Three", "--tag", "feature", "--content", "open"])
+
+    result = runner.invoke(forums, ["bulk-close", "--tag", "bug", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "Closed 2 thread(s)." in result.output
+
+    # Verify threads are closed
+    thread_one = load_thread(tmp_path, "thread-one")
+    thread_two = load_thread(tmp_path, "thread-two")
+    thread_three = load_thread(tmp_path, "thread-three")
+    assert thread_one.meta.status == "resolved"
+    assert thread_two.meta.status == "resolved"
+    assert thread_three.meta.status == "open"  # not closed
+
+
+def test_forums_bulk_close_with_status_filter(tmp_path):
+    """forums bulk-close filters by status."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Open Thread", "--content", "open"])
+    runner.invoke(forums, ["new", "--title", "Closed Thread", "--content", "will close"])
+    runner.invoke(forums, ["close", "closed-thread"])
+
+    result = runner.invoke(forums, ["bulk-close", "--status", "open", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "Closed 1 thread(s)." in result.output
+
+    open_thread = load_thread(tmp_path, "open-thread")
+    closed_thread = load_thread(tmp_path, "closed-thread")
+    assert open_thread.meta.status == "resolved"
+    assert closed_thread.meta.status == "resolved"
+
+
+def test_forums_bulk_close_with_content(tmp_path):
+    """forums bulk-close adds closing entry with content."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Issue A", "--tag", "bug", "--content", "open"])
+    runner.invoke(forums, ["new", "--title", "Issue B", "--tag", "bug", "--content", "open"])
+
+    result = runner.invoke(forums, ["bulk-close", "--tag", "bug", "--content", "bulk resolved", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "Closed 2 thread(s)." in result.output
+
+    thread_a = load_thread(tmp_path, "issue-a")
+    thread_b = load_thread(tmp_path, "issue-b")
+    # Each thread should have an extra entry
+    assert len(thread_a.entries) == 2
+    assert len(thread_b.entries) == 2
+    # Last entry should be the closing note
+    assert thread_a.entries[-1].content == "bulk resolved"
+    assert thread_b.entries[-1].content == "bulk resolved"
+    assert thread_a.entries[-1].status == "resolved"
+    assert thread_b.entries[-1].status == "resolved"
+
+
+def test_forums_bulk_close_no_matches(tmp_path):
+    """forums bulk-close shows message when no threads match."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Some Thread", "--tag", "dev", "--content", "open"])
+
+    result = runner.invoke(forums, ["bulk-close", "--tag", "nonexistent", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "No threads matching filters" in result.output
+
+
+def test_forums_bulk_close_requires_confirmation(tmp_path):
+    """forums bulk-close asks for confirmation (can be skipped with --force)."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Thread", "--tag", "bug", "--content", "open"])
+
+    # Without --force, sends 'n' to reject confirmation
+    result = runner.invoke(forums, ["bulk-close", "--tag", "bug"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Aborted" in result.output
+
+    # Thread should still be open
+    thread = load_thread(tmp_path, "thread")
+    assert thread.meta.status == "open"
+
+
+def test_forums_bulk_close_confirm_closes_threads(tmp_path):
+    """forums bulk-close closes threads when user confirms."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Thread", "--tag", "bug", "--content", "open"])
+
+    # Send 'y' to confirm
+    result = runner.invoke(forums, ["bulk-close", "--tag", "bug"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert "Closed 1 thread(s)." in result.output
+
+    # Thread should be closed
+    thread = load_thread(tmp_path, "thread")
+    assert thread.meta.status == "resolved"
+
+
+def test_forums_bulk_close_lists_matching_threads(tmp_path):
+    """forums bulk-close shows what will be closed before asking for confirmation."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Bug One", "--tag", "bug", "--content", "first"])
+    runner.invoke(forums, ["new", "--title", "Bug Two", "--tag", "bug", "--content", "second"])
+
+    result = runner.invoke(forums, ["bulk-close", "--tag", "bug", "--force"])
+    assert result.exit_code == 0, result.output
+    assert "Found 2 thread(s) to close:" in result.output
+    assert "bug-one" in result.output
+    assert "bug-two" in result.output
+    assert "Bug One" in result.output
+    assert "Bug Two" in result.output

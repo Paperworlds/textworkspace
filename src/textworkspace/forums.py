@@ -503,6 +503,51 @@ def forums_close(slug: str, content: str | None, author: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# forums bulk-close
+# ---------------------------------------------------------------------------
+
+@forums.command("bulk-close")
+@click.option("--status", "-s", default=None, help="Filter by status (open/resolved).")
+@click.option("--tag", "-t", default=None, help="Filter by tag.")
+@click.option("--content", "-c", default=None, help="Optional closing entry content for each thread.")
+@click.option("--force", "-f", is_flag=True, default=False, help="Skip confirmation prompt.")
+@click.option("--author", "-a", default=None, help="Author name for closing entry.")
+def forums_bulk_close(status: str | None, tag: str | None, content: str | None, force: bool, author: str | None) -> None:
+    """Close all threads matching filters in bulk."""
+    root = get_root()
+    threads = list_threads(root, status=status, tag=tag)
+
+    if not threads:
+        click.echo("No threads matching filters.")
+        return
+
+    # Show what will be closed
+    click.echo(f"Found {len(threads)} thread(s) to close:")
+    for t in threads:
+        slug = t.path.parent.name
+        click.echo(f"  - {slug}: {t.meta.title}")
+
+    # Ask for confirmation
+    if not force:
+        if not click.confirm("Close these threads?"):
+            click.echo("Aborted.")
+            return
+
+    # Close each thread
+    author_name = get_author(author)
+    closed = 0
+    for t in threads:
+        t.meta.status = "resolved"
+        if content:
+            entry = Entry(author=author_name, timestamp=_now_iso(), status="resolved", content=content)
+            t.entries.append(entry)
+        save_thread(t)
+        closed += 1
+
+    click.echo(f"Closed {closed} thread(s).")
+
+
+# ---------------------------------------------------------------------------
 # forums edit
 # ---------------------------------------------------------------------------
 
