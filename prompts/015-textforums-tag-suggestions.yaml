@@ -1,0 +1,190 @@
+id: "015"
+title: "textforums tags — list existing tags and suggest them during new/add"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.75
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "How are tags stored and how does the new command accept them?"
+      answer: |
+        ThreadMeta.tags is list[str]. forums_new uses @click.option("--tag", "-t", "tags",
+        multiple=True) so users pass --tag foo --tag bar. No validation or suggestion
+        happens today — typos silently create new tags.
+
+    - id: U02
+      question: "What is the right UX for suggestions — a new command, or inline hints?"
+      answer: |
+        Both. A standalone `textforums tags` command (machine-readable output for scripting
+        and review). Plus: when $EDITOR is NOT used for new/add content (i.e. --content is
+        not supplied and editor opens), print existing tags above the template. This avoids
+        breaking --content fast-path.
+
+  findings: |
+    Collecting all tags requires iterating all threads once. list_threads() already loads
+    everything. A dedicated collect_tags(root) helper keeps the logic reusable.
+
+    The editor template in forums_new (line ~303) currently contains:
+      "# New entry for: {title}\n# Author: {author}\n# Write your entry...\n\n"
+    Inserting a "# Existing tags: foo, bar, baz" comment line is safe and non-breaking.
+    Same for forums_add template (line ~380).
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "textforums tags is called"
+    shall: "print all unique tags used across all threads, one per line, sorted alphabetically"
+
+  - id: R02
+    when: "no threads have any tags"
+    shall: "print nothing and exit 0"
+
+  - id: R03
+    when: "forums_new opens $EDITOR (no --content flag)"
+    shall: "prepend a comment line '# Existing tags: <comma-separated sorted tags>' to the editor template"
+
+  - id: R04
+    when: "forums_new is called with --content (no editor opens)"
+    shall: "behaviour is unchanged — no tag hint printed"
+
+  - id: R05
+    when: "forums_add opens $EDITOR (no --content flag)"
+    shall: "prepend the same existing-tags comment line to the editor template"
+
+  - id: R06
+    when: "there are no existing tags when editor opens"
+    shall: "omit the existing-tags comment line entirely — do not print '# Existing tags: '"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Add collect_tags(root) helper and `textforums tags` command. Inject tag hint into
+    editor templates in forums_new and forums_add when editor mode is active.
+
+  modules:
+    - path: src/textworkspace/forums.py
+      role: "Add collect_tags(), textforums tags command, update editor templates in new/add."
+    - path: tests/test_forums.py
+      role: "Tests for collect_tags() and tags CLI command."
+
+  data_structures:
+    collect_tags:
+      signature: "def collect_tags(root: Path) -> list[str]"
+      logic: |
+        threads = list_threads(root)
+        tags: set[str] = set()
+        for t in threads:
+            tags.update(t.meta.tags)
+        return sorted(tags)
+
+    editor_template_injection:
+      location: "forums_new and forums_add, immediately before calling _open_in_editor()"
+      logic: |
+        existing = collect_tags(root)
+        tag_hint = (f"# Existing tags: {', '.join(existing)}\n" if existing else "")
+        template = tag_hint + template
+
+  sequence: |
+    textforums tags:
+      1. root = get_root()
+      2. tags = collect_tags(root)
+      3. for tag in tags: click.echo(tag)
+
+    forums_new / forums_add (editor path only):
+      1. collect existing tags
+      2. prepend hint comment to template string
+      3. call _open_in_editor(template) as before
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: collect-tags-helper
+    mode: implement
+    satisfies: [R01, R02]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py, add collect_tags() after list_threads() (around line 193):
+        def collect_tags(root: Path) -> list[str]:
+            """Return sorted list of all unique tags across all threads."""
+            threads = list_threads(root)
+            tags: set[str] = set()
+            for t in threads:
+                tags.update(t.meta.tags)
+            return sorted(tags)
+
+      Then add the CLI command after forums_list:
+        @forums.command("tags")
+        def forums_tags() -> None:
+            """List all tags used across threads."""
+            root = get_root()
+            for tag in collect_tags(root):
+                click.echo(tag)
+    check:
+      - "WHEN textforums tags is run with threads having tags foo and bar, THE SYSTEM SHALL print 'bar' then 'foo'"
+      - "WHEN no threads exist, THE SYSTEM SHALL print nothing"
+
+  - id: T02
+    name: inject-tag-hint-in-editor
+    mode: implement
+    satisfies: [R03, R04, R05, R06]
+    status: pending
+    do: |
+      In forums_new (around line 303), before the `if content is None:` block,
+      compute existing tags once:
+        existing_tags = collect_tags(root)
+
+      Inside the `if content is None:` block, change the template assignment to:
+        tag_hint = (f"# Existing tags: {', '.join(existing_tags)}\n" if existing_tags else "")
+        template = (
+            tag_hint +
+            f"# New entry for: {title}\n"
+            f"# Author: {author}\n"
+            "# Write your entry below this line:\n\n"
+        )
+
+      Apply the same pattern in forums_add (around line 380) inside its `if content is None:` block.
+    check:
+      - "WHEN forums_new opens editor with existing tags ['bug', 'feat'], THE SYSTEM SHALL show '# Existing tags: bug, feat' at top of template"
+      - "WHEN forums_new is called with --content flag, THE SYSTEM SHALL not call collect_tags"
+
+  - id: T03
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R05, R06]
+    status: pending
+    do: |
+      In tests/test_forums.py add:
+      - test_collect_tags_returns_sorted_unique: two threads with overlapping tags → sorted unique list
+      - test_collect_tags_empty: no threads → empty list
+      - test_collect_tags_no_tags_on_threads: threads exist but have no tags → empty list
+      - test_forums_tags_cli: CliRunner invokes 'tags' command → output lines match sorted tags
+      - test_forums_new_editor_shows_tag_hint: mock _open_in_editor, check template starts with '# Existing tags:'
+      - test_forums_new_editor_no_hint_when_no_tags: no existing tags → hint line absent from template
+      Use tmp_path + save_thread() fixtures.
+    check:
+      - "WHEN pytest tests/test_forums.py -v -k tags is run, THE SYSTEM SHALL show 6 passed"
+
+  - id: T04
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: textforums tags command + tag hints in editor'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

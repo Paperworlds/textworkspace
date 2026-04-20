@@ -1,0 +1,148 @@
+id: "014"
+title: "textforums search — full-text query across thread titles, entry content, and tags"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 1.00
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "Does list_threads() already load full thread content, or just headers?"
+      answer: |
+        list_threads() calls load_thread() for every slug dir, which parses the full
+        YAML including all entries. Full content is already in memory — no lazy loading
+        needed. Adding a query filter is just an extra pass over already-loaded data.
+
+    - id: U02
+      question: "What fields should be searched?"
+      answer: |
+        ThreadMeta.title (str), ThreadMeta.tags (list[str]), Entry.content (str) across
+        all entries. Entry.status and author are not searched — they're metadata not
+        searchable context.
+
+  findings: |
+    list_threads() current signature:
+      def list_threads(root: Path, status: str | None = None, tag: str | None = None) -> list[Thread]
+
+    Thread.meta.tags is list[str]. Entry.content may be empty string (never None after
+    _parse_entry). Case-insensitive substring match is the right default — no need for
+    regex or fuzzy matching at this stage.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "textforums list is called with --query <text>"
+    shall: "return only threads where query (case-insensitive) appears in title, any entry content, or any tag"
+
+  - id: R02
+    when: "--query is combined with --status or --tag"
+    shall: "apply all three filters with AND logic — a thread must satisfy every supplied filter"
+
+  - id: R03
+    when: "--query is not supplied"
+    shall: "behaviour is identical to current implementation — no performance change"
+
+  - id: R04
+    when: "no threads match all supplied filters"
+    shall: "print 'No threads found.' and exit 0"
+
+  - id: R05
+    when: "a thread matches on tag content via --query (e.g. --query bug matches tag 'bug')"
+    shall: "include that thread — tag text is part of the searchable surface"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Add optional `query` parameter to list_threads() and --query/-q option to
+    `textforums list`. Since list_threads() already loads full thread content,
+    filtering is a pure in-memory check with no I/O change.
+
+  modules:
+    - path: src/textworkspace/forums.py
+      role: "Add query param to list_threads(); add --query/-q to forums_list command."
+    - path: tests/test_forums.py
+      role: "Five new test functions covering R01-R05."
+
+  data_structures:
+    list_threads:
+      signature: |
+        def list_threads(
+            root: Path,
+            status: str | None = None,
+            tag: str | None = None,
+            query: str | None = None,
+        ) -> list[Thread]
+      filter_logic: |
+        if query is not None:
+            q = query.lower()
+            if not (
+                q in thread.meta.title.lower()
+                or any(q in t.lower() for t in thread.meta.tags)
+                or any(q in (e.content or "").lower() for e in thread.entries)
+            ):
+                continue
+
+  sequence: |
+    1. forums_list receives --query value (or None)
+    2. passes to list_threads(root, status=status, tag=tag, query=query)
+    3. list_threads applies existing status/tag filters, then query filter
+    4. returns filtered list → same table rendering as today
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: extend-list-threads
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py:
+      1. Add `query: str | None = None` parameter to list_threads() after `tag`.
+      2. After the existing tag filter block (line ~191), add the query filter
+         using the logic in design.data_structures.list_threads.filter_logic.
+      3. Add --query/-q option to forums_list command:
+           @click.option("--query", "-q", default=None, help="Full-text search across title, tags, and entry content.")
+      4. Pass query=query to list_threads() call.
+    check:
+      - "WHEN list_threads(root, query='foo') is called, THE SYSTEM SHALL return only threads containing 'foo'"
+      - "WHEN list_threads(root, status='open', query='foo') is called, THE SYSTEM SHALL return only open threads containing 'foo'"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05]
+    status: pending
+    do: |
+      In tests/test_forums.py, add after existing list_threads tests:
+      - test_list_query_matches_title: thread with 'hello' in title → returned by query='hello'
+      - test_list_query_matches_entry_content: thread with 'hello' only in entry content → returned
+      - test_list_query_matches_tag: thread with tag 'hello' but not in title/content → returned
+      - test_list_query_no_match: no thread contains query → empty list
+      - test_list_query_combined_with_status: query matches two threads; one is resolved; status=open → only open one returned
+      Use tmp_path + save_thread() to create fixtures. Do not read from ~/.textforums.
+    check:
+      - "WHEN pytest tests/test_forums.py -v -k query is run, THE SYSTEM SHALL show 5 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: textforums list --query full-text search'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: textforums commit"

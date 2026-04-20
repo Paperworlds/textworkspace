@@ -1,0 +1,241 @@
+id: "016"
+title: "textforums link — thread-to-thread relationships (blocks, relates-to)"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "Where do links live in the YAML — meta or a separate top-level key?"
+      answer: |
+        Links belong in ThreadMeta alongside tags and status. They are thread-level
+        metadata, not entry-level. This keeps the YAML structure flat and consistent.
+        Stored as: links: [{type: blocks, slug: other-slug}, ...]
+        _meta_to_dict and _parse_meta must be updated. Old threads without links: key
+        must load cleanly — _parse_meta uses .get("links") or [].
+
+    - id: U02
+      question: "Should link targets be validated at write time?"
+      answer: |
+        Validate at write time: if target slug dir does not exist under root, print
+        a warning and abort. Loose coupling (slug may not exist yet) is an option
+        but creates silent dead links. Validation is the right default.
+
+    - id: U03
+      question: "How should links appear in textforums show?"
+      answer: |
+        Print a Links: section in the header block (after Tags:), one line per link:
+          Links:   blocks → other-slug
+                   relates-to → another-slug
+        Only rendered if thread.meta.links is non-empty.
+
+  findings: |
+    ThreadMeta dataclass must gain a `links` field:
+      links: list[dict] = field(default_factory=list)
+    Each dict: {"type": "blocks"|"relates-to", "slug": str}
+
+    Reverse lookup (show what blocks this thread) is out of scope for this prompt.
+    tw doctor stale-thread check (prompt 018) should note that blocked threads should
+    not be flagged as stale if their blocker is still open.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "textforums link <slug> --blocks <target> is called"
+    shall: "add {type: blocks, slug: target} to thread.meta.links and save"
+
+  - id: R02
+    when: "textforums link <slug> --relates-to <target> is called"
+    shall: "add {type: relates-to, slug: target} to thread.meta.links and save"
+
+  - id: R03
+    when: "the target slug does not exist as a thread directory"
+    shall: "print '[ERROR] Thread <target> not found.' and exit 1 without modifying the source thread"
+
+  - id: R04
+    when: "the link already exists (same type + same target slug)"
+    shall: "print 'Already linked.' and exit 0 without duplicating the entry"
+
+  - id: R05
+    when: "textforums show is called on a thread with links"
+    shall: "print a 'Links:' section in the header block showing type and target slug for each link"
+
+  - id: R06
+    when: "textforums show is called on a thread with no links"
+    shall: "omit the Links: section entirely"
+
+  - id: R07
+    when: "an existing thread YAML has no 'links' key"
+    shall: "load without error — _parse_meta treats missing links as empty list"
+
+  - id: R08
+    when: "--blocks and --relates-to are both supplied in one call"
+    shall: "print '[ERROR] Supply exactly one of --blocks or --relates-to.' and exit 1"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Add `links` field to ThreadMeta. Update serialisation helpers. Add `textforums link`
+    command with --blocks / --relates-to options (mutually exclusive). Update forums_show
+    to render links in the header. No new data file — links are stored inline in thread.yaml.
+
+  modules:
+    - path: src/textworkspace/forums.py
+      role: "ThreadMeta.links field, _parse_meta/_meta_to_dict update, forums_link command, forums_show update."
+    - path: tests/test_forums.py
+      role: "Tests for serialisation round-trip, link command (valid/duplicate/missing/conflict), show rendering."
+
+  data_structures:
+    ThreadMeta:
+      change: "Add `links: list[dict] = field(default_factory=list)` after tags field."
+
+    _parse_meta:
+      change: |
+        Add: links=data.get("links") or [],
+        No validation of link dicts on load — load whatever is stored.
+
+    _meta_to_dict:
+      change: |
+        Add: "links": meta.links,
+        Only emit if non-empty to keep YAML clean:
+          if meta.links: d["links"] = meta.links
+
+  sequence:
+    textforums_link: |
+      1. Validate exactly one of --blocks / --relates-to is supplied (R08)
+      2. root = get_root()
+      3. thread = load_thread(root, slug) — ClickException if not found
+      4. target_dir = root / target_slug — exit 1 if not target_dir.exists() (R03)
+      5. link = {"type": link_type, "slug": target_slug}
+      6. If link already in thread.meta.links → print 'Already linked.' exit 0 (R04)
+      7. thread.meta.links.append(link)
+      8. save_thread(thread)
+      9. click.echo(f"Linked '{slug}' --{link_type}--> '{target_slug}'.")
+
+    forums_show_links_section: |
+      After the Tags: line (around line 347), add:
+        if m.links:
+            prefix = "Links:   "
+            for i, lnk in enumerate(m.links):
+                indent = prefix if i == 0 else " " * len(prefix)
+                click.echo(f"{indent}{lnk['type']} → {lnk['slug']}")
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: update-threadmeta-and-serialisation
+    mode: implement
+    satisfies: [R07]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py:
+      1. Add `links: list[dict] = field(default_factory=list)` to ThreadMeta after the tags field.
+      2. In _parse_meta(), add `links=data.get("links") or []` to the ThreadMeta() constructor.
+      3. In _meta_to_dict(), add conditional emit:
+           d = {"title":..., "created":..., "author":..., "tags":..., "status":...}
+           if meta.links:
+               d["links"] = meta.links
+           return d
+         (Change the existing return dict literal to a variable so the conditional can be applied.)
+    check:
+      - "WHEN a thread YAML without 'links' key is loaded, THE SYSTEM SHALL produce ThreadMeta with links=[]"
+      - "WHEN a thread with links is saved and reloaded, THE SYSTEM SHALL round-trip the links list"
+
+  - id: T02
+    name: forums-link-command
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R08]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py, add after the forums_reopen command:
+
+        @forums.command("link")
+        @click.argument("slug")
+        @click.option("--blocks", "blocks_slug", default=None, help="This thread blocks the target.")
+        @click.option("--relates-to", "relates_slug", default=None, help="This thread relates to the target.")
+        def forums_link(slug: str, blocks_slug: str | None, relates_slug: str | None) -> None:
+            """Add a link from this thread to another."""
+            if bool(blocks_slug) == bool(relates_slug):
+                raise click.UsageError("Supply exactly one of --blocks or --relates-to.")
+            link_type = "blocks" if blocks_slug else "relates-to"
+            target = blocks_slug or relates_slug
+            root = get_root()
+            try:
+                thread = load_thread(root, slug)
+            except FileNotFoundError:
+                raise click.ClickException(f"Thread '{slug}' not found.")
+            if not (root / target).exists():
+                raise click.ClickException(f"Thread '{target}' not found.")
+            link = {"type": link_type, "slug": target}
+            if link in thread.meta.links:
+                click.echo("Already linked.")
+                return
+            thread.meta.links.append(link)
+            save_thread(thread)
+            click.echo(f"Linked '{slug}' --{link_type}--> '{target}'.")
+    check:
+      - "WHEN textforums link A --blocks B is called and B exists, THE SYSTEM SHALL save link and print confirmation"
+      - "WHEN target does not exist, THE SYSTEM SHALL exit with error and not modify source thread"
+      - "WHEN link already exists, THE SYSTEM SHALL print 'Already linked.' and not duplicate"
+      - "WHEN both --blocks and --relates-to are supplied, THE SYSTEM SHALL exit with UsageError"
+
+  - id: T03
+    name: update-forums-show
+    mode: implement
+    satisfies: [R05, R06]
+    status: pending
+    do: |
+      In forums_show (around line 347, after the `if m.tags:` block), add:
+        if m.links:
+            prefix = "Links:   "
+            for i, lnk in enumerate(m.links):
+                indent = prefix if i == 0 else " " * len(prefix)
+                click.echo(f"{indent}{lnk['type']} → {lnk['slug']}")
+    check:
+      - "WHEN a thread has links, THE SYSTEM SHALL print 'Links:   blocks → other-slug' in show output"
+      - "WHEN a thread has no links, THE SYSTEM SHALL not print a Links: line"
+
+  - id: T04
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08]
+    status: pending
+    do: |
+      In tests/test_forums.py add:
+      - test_link_blocks_creates_entry: link A --blocks B → A.meta.links == [{"type":"blocks","slug":"B"}]
+      - test_link_relates_to: link A --relates-to B → type is "relates-to"
+      - test_link_target_not_found: B dir missing → exit 1, A unchanged
+      - test_link_duplicate_skipped: call link twice → still one entry, prints 'Already linked.'
+      - test_link_both_flags_errors: supply --blocks and --relates-to → UsageError
+      - test_show_renders_links: thread with links → 'blocks → other' in show output
+      - test_show_no_links_section: thread without links → no 'Links:' in show output
+      - test_parse_meta_missing_links: YAML without links key → links=[]
+      - test_threadmeta_round_trip_links: save+load preserves links list
+      Use tmp_path fixtures; create thread dirs manually where target validation is needed.
+    check:
+      - "WHEN pytest tests/test_forums.py -v -k link is run, THE SYSTEM SHALL show 9 passed"
+
+  - id: T05
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: textforums link command (blocks, relates-to)'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

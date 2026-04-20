@@ -1,0 +1,171 @@
+id: "020"
+title: "tw doctor OLD_THREAD — parse textforums doctor output and surface stale threads"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.75
+depends_on: ["018"]
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "Does tw doctor already call textforums doctor for STALE lines?"
+      answer: |
+        Yes. The stale-path aggregation loop in run_doctor_checks() (doctor.py ~line 368)
+        calls each installed tool's `doctor` subcommand and parses lines starting with
+        "STALE ". It silently ignores all other output lines. We need it to also parse
+        "OLD_THREAD <slug> <age_days>" lines emitted by textforums doctor (prompt 018).
+
+    - id: U02
+      question: "What should a stale-thread CheckResult look like in tw doctor output?"
+      answer: |
+        label: "textforums:<slug>"
+        detail: "open thread stale for <age> days"
+        status: "warn"
+        fix: "textforums close <slug>"
+        This is consistent with how STALE path results are formatted.
+
+    - id: U03
+      question: "Should tw doctor call textforums doctor even if textforums is only in tools (not installed_tools)?"
+      answer: |
+        detect_installed_tools() returns tools it finds in PATH. textforums is bundled
+        with textworkspace (same package), so `textforums` binary is always available
+        when tw is installed. It will appear in detect_installed_tools() result.
+        No special-casing needed.
+
+  findings: |
+    The existing stale-path aggregation loop structure (doctor.py ~line 368-391):
+      for tool_name, tool_info in tools.items():
+          if not tool_info.installed or not tool_info.bin_path: continue
+          try:
+              result = subprocess.run([tool_info.bin_path, "doctor"], ...)
+              for line in result.stdout.splitlines():
+                  if line.startswith("STALE "):
+                      ... parse and append CheckResult ...
+          except (FileNotFoundError, subprocess.TimeoutExpired):
+              pass
+
+    We extend the inner `for line` loop to also handle OLD_THREAD lines.
+    The two parsers are independent branches inside the same line loop.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "a tool's doctor output contains 'OLD_THREAD <slug> <age_days>'"
+    shall: "add a CheckResult with status=warn, label='<tool>:<slug>', detail='open thread stale for <age_days> days', fix='textforums close <slug>'"
+
+  - id: R02
+    when: "a tool's doctor output contains both STALE and OLD_THREAD lines"
+    shall: "parse both independently and add a CheckResult for each"
+
+  - id: R03
+    when: "OLD_THREAD line has fewer than 3 parts after split"
+    shall: "skip that line silently — do not crash"
+
+  - id: R04
+    when: "textforums doctor exits 1 (stale threads found)"
+    shall: "still parse and include OLD_THREAD results — exit code does not gate parsing"
+
+  - id: R05
+    when: "textforums is not installed or times out"
+    shall: "skip silently — consistent with existing STALE timeout behaviour"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Extend the existing stale-path line-parsing loop in run_doctor_checks() to handle
+    OLD_THREAD lines alongside STALE lines. Single-function change in doctor.py.
+
+  modules:
+    - path: src/textworkspace/doctor.py
+      role: "Extend line-parsing loop in run_doctor_checks() to handle OLD_THREAD."
+    - path: tests/test_cli.py or tests/test_repo_move.py
+      role: "Tests in test_cli.py near existing doctor tests."
+
+  data_structures:
+    OLD_THREAD_line_format: "OLD_THREAD <slug> <age_days>   (3 parts after split(maxsplit=2))"
+
+  sequence: |
+    In run_doctor_checks(), inside the line-parsing loop, after the STALE branch add:
+
+      elif line.startswith("OLD_THREAD "):
+          parts = line.split(maxsplit=2)
+          if len(parts) == 3:
+              _, slug, age_str = parts
+              results.append(CheckResult(
+                  label=f"{tool_name}:{slug}",
+                  detail=f"open thread stale for {age_str} days",
+                  status="warn",
+                  fix=f"textforums close {slug}",
+              ))
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: extend-line-parser
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05]
+    status: pending
+    do: |
+      In src/textworkspace/doctor.py, find the stale-path loop (search for "STALE ").
+      The inner for-line loop currently only checks `if line.startswith("STALE ")`.
+      Add an elif branch immediately after it:
+
+        elif line.startswith("OLD_THREAD "):
+            parts = line.split(maxsplit=2)
+            if len(parts) == 3:
+                _, slug, age_str = parts
+                results.append(CheckResult(
+                    label=f"{tool_name}:{slug}",
+                    detail=f"open thread stale for {age_str} days",
+                    status="warn",
+                    fix=f"textforums close {slug}",
+                ))
+
+      No other changes needed.
+    check:
+      - "WHEN a tool's doctor stdout contains 'OLD_THREAD my-slug 20', THE SYSTEM SHALL add a CheckResult with label containing 'my-slug'"
+      - "WHEN the OLD_THREAD line is malformed (< 3 parts), THE SYSTEM SHALL skip it without crashing"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05]
+    status: pending
+    do: |
+      In tests/test_cli.py, after the existing doctor tests, add:
+      - test_doctor_old_thread_line_creates_checkresult:
+          mock subprocess.run to return stdout="OLD_THREAD stale-slug 20\n"
+          → run_doctor_checks() result includes CheckResult with status=warn,
+            label containing "stale-slug", detail containing "20 days"
+      - test_doctor_old_thread_and_stale_both_parsed:
+          stdout = "STALE myrepo /old/path\nOLD_THREAD stale-slug 20\n"
+          → two CheckResults added
+      - test_doctor_old_thread_malformed_skipped:
+          stdout = "OLD_THREAD onlytwoparts\n"
+          → no crash, no CheckResult added
+      Use same fake_run / monkeypatch pattern as existing test_R13_doctor_stale_aggregation.
+    check:
+      - "WHEN pytest tests/test_cli.py -v -k old_thread is run, THE SYSTEM SHALL show 3 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: tw doctor parses OLD_THREAD lines from textforums doctor'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

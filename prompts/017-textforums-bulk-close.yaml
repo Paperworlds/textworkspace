@@ -1,0 +1,182 @@
+id: "017"
+title: "textforums bulk-close — close all threads matching a filter in one command"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.75
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "Should bulk-close be a subcommand or a flag on close?"
+      answer: |
+        Subcommand: `textforums bulk-close`. Keeping it separate from `close` avoids
+        accidental mass-close from a typo. `close` stays single-slug.
+
+    - id: U02
+      question: "What filters should be supported?"
+      answer: |
+        --tag and --query (reusing 014). Always filters to status=open implicitly —
+        closing already-resolved threads is a no-op and confusing. --status filter
+        is intentionally omitted.
+
+    - id: U03
+      question: "Confirmation UX — prompt per thread or one summary prompt?"
+      answer: |
+        Print the list of matching slugs first, then a single click.confirm().
+        --yes flag bypasses confirmation for scripting. --dry-run prints the list
+        and exits without closing.
+
+  findings: |
+    forums_close() logic is: set meta.status = "resolved", optionally append entry, save.
+    bulk-close reuses this pattern in a loop. The closing note (--content) applies to
+    every thread — same message for all. This is appropriate for sprint cleanup.
+
+    list_threads() with status=None + tag/query filters returns all statuses.
+    bulk-close must additionally filter to status="open" before presenting the list.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "textforums bulk-close is called"
+    shall: "list matching open threads, ask for confirmation, then close all of them"
+
+  - id: R02
+    when: "--dry-run is supplied"
+    shall: "print matching slugs and exit 0 without closing any thread"
+
+  - id: R03
+    when: "--yes is supplied"
+    shall: "skip the confirmation prompt and close immediately"
+
+  - id: R04
+    when: "no open threads match the filters"
+    shall: "print 'No matching open threads.' and exit 0"
+
+  - id: R05
+    when: "--content <text> is supplied"
+    shall: "append a closing entry with that text to every closed thread"
+
+  - id: R06
+    when: "user declines the confirmation prompt"
+    shall: "print 'Aborted.' and exit 0 without modifying any thread"
+
+  - id: R07
+    when: "--tag and --query are both supplied"
+    shall: "apply both filters (AND logic) to narrow the candidate set"
+
+  - id: R08
+    when: "bulk-close completes"
+    shall: "print 'Closed N thread(s).' where N is the count of threads that were closed"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    New `textforums bulk-close` command. Filters open threads by tag/query, shows
+    list to user, confirms, then loops calling the close logic. Re-uses list_threads()
+    with status="open" plus optional tag/query.
+
+  modules:
+    - path: src/textworkspace/forums.py
+      role: "Add forums_bulk_close command. No data model changes."
+    - path: tests/test_forums.py
+      role: "Tests covering all requirements."
+
+  sequence: |
+    1. root = get_root()
+    2. threads = list_threads(root, status="open", tag=tag, query=query)
+       (query param added by prompt 014 — if not yet present, inline the filter)
+    3. if not threads: print 'No matching open threads.' return
+    4. if --dry-run: print slugs, return
+    5. Print "Will close N thread(s):" + slug list
+    6. if not --yes: click.confirm("Proceed?", abort=True)
+    7. author = get_author()
+    8. for thread in threads:
+           thread.meta.status = "resolved"
+           if content:
+               entry = Entry(author=author, timestamp=_now_iso(), status="resolved", content=content)
+               thread.entries.append(entry)
+           save_thread(thread)
+           click.echo(f"  closed: {thread.path.parent.name}")
+    9. click.echo(f"Closed {len(threads)} thread(s).")
+
+  note_on_query_dependency: |
+    If prompt 014 has not been run yet, add an inline query filter inside the
+    bulk-close function body rather than depending on the list_threads() query param.
+    Check whether list_threads() accepts query= before using it.
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: bulk-close-command
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py, add after forums_reopen (or after forums_link if 016 is done):
+
+        @forums.command("bulk-close")
+        @click.option("--tag", "-t", default=None, help="Filter by tag.")
+        @click.option("--query", "-q", default=None, help="Full-text filter (title/content/tags).")
+        @click.option("--content", "-c", default=None, help="Closing note appended to every thread.")
+        @click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation.")
+        @click.option("--dry-run", is_flag=True, default=False, help="Show what would be closed without closing.")
+        def forums_bulk_close(tag, query, content, yes, dry_run):
+            """Close all open threads matching the given filters."""
+
+      Implement per design.sequence. For the query filter: check if list_threads()
+      accepts a query parameter (it will if 014 is done). If not, filter inline:
+        if query:
+            q = query.lower()
+            threads = [t for t in threads if (
+                q in t.meta.title.lower()
+                or any(q in tag_.lower() for tag_ in t.meta.tags)
+                or any(q in e.content.lower() for e in t.entries)
+            )]
+    check:
+      - "WHEN bulk-close --dry-run --tag foo is called with 2 matching threads, THE SYSTEM SHALL print 2 slugs and exit without modifying files"
+      - "WHEN user confirms, THE SYSTEM SHALL set meta.status='resolved' on all matched threads"
+      - "WHEN --yes is supplied, THE SYSTEM SHALL skip the prompt"
+      - "WHEN user declines, THE SYSTEM SHALL print 'Aborted.' and leave threads unchanged"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08]
+    status: pending
+    do: |
+      In tests/test_forums.py add:
+      - test_bulk_close_dry_run: 2 open threads with tag 'sprint' → dry-run prints slugs, threads still open
+      - test_bulk_close_closes_all: --yes flag → all matched threads resolved, count printed
+      - test_bulk_close_no_match: no threads with tag 'missing' → prints 'No matching open threads.'
+      - test_bulk_close_user_confirms: input='y' → threads closed
+      - test_bulk_close_user_declines: input='n' → 'Aborted.', threads unchanged
+      - test_bulk_close_with_content: --yes --content "done" → closing entry appended to each thread
+      - test_bulk_close_skips_resolved: one open + one resolved with same tag → only open one closed
+      - test_bulk_close_tag_and_query: --tag sprint --query foo → only thread with both matches is closed
+      Use tmp_path + save_thread() for all fixtures.
+    check:
+      - "WHEN pytest tests/test_forums.py -v -k bulk_close is run, THE SYSTEM SHALL show 8 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: textforums bulk-close command'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

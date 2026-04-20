@@ -1,0 +1,225 @@
+id: "018"
+title: "textforums doctor — machine-readable stale-thread output for tw doctor"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.00
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "What does the tw doctor STALE contract expect?"
+      answer: |
+        From CONVENTIONS.yaml path_tracking.doctor_command:
+          <tool> doctor
+          Prints: STALE <name> <old-path>
+          Exits 0 if clean, 1 if stale paths found.
+        The STALE contract is designed for path staleness. Stale threads are a
+        different concept. We define a second machine-readable line type:
+          OLD_THREAD <slug> <age_days>
+        tw doctor (doctor.py) currently only parses STALE lines. It will need a
+        separate parsing block for OLD_THREAD lines. This prompt covers the textforums
+        side only; tw doctor parsing is a follow-on (prompt 019 or separate tw prompt).
+
+    - id: U02
+      question: "What threshold makes a thread 'stale'? Should it be configurable?"
+      answer: |
+        Default: 14 days. Configurable via config.forums.stale_days (int) in
+        ~/.config/paperworlds/config.yaml. If the key is missing, use 14.
+        Threads with status != "open" are never stale.
+
+    - id: U03
+      question: "Should textforums doctor also check path staleness like other tools?"
+      answer: |
+        textforums does not track repo paths — it has no path-tracking config.
+        It will never emit STALE lines. The output is OLD_THREAD lines only.
+        Exit 0 if no old threads; exit 1 if any found (consistent with STALE contract).
+
+    - id: U04
+      question: "Should tw doctor be updated in this prompt?"
+      answer: |
+        No. This prompt only adds `textforums doctor` to the forums CLI. Updating
+        tw doctor (doctor.py) to parse OLD_THREAD lines and render them is a separate
+        task — either a follow-on prompt or a tw doctor prompt.
+
+  findings: |
+    Thread age calculation: parse thread.meta.created (ISO 8601 with Z suffix) using
+    datetime.fromisoformat(created.replace("Z", "+00:00")). This pattern already exists
+    in forums_list (line ~271).
+
+    Config access in forums.py uses the lazy try/except pattern (get_root, get_author).
+    stale_days config follows the same pattern:
+      cfg.forums.get("stale_days", 14)
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "textforums doctor is called"
+    shall: "print one 'OLD_THREAD <slug> <age_days>' line for each open thread older than stale_days"
+
+  - id: R02
+    when: "no open threads are older than stale_days"
+    shall: "print nothing and exit 0"
+
+  - id: R03
+    when: "one or more stale threads are found"
+    shall: "exit 1 after printing all OLD_THREAD lines"
+
+  - id: R04
+    when: "stale_days is set in config.forums.stale_days"
+    shall: "use that value instead of the default 14"
+
+  - id: R05
+    when: "a thread's status is not 'open'"
+    shall: "never emit an OLD_THREAD line for it regardless of age"
+
+  - id: R06
+    when: "a thread's created timestamp cannot be parsed"
+    shall: "skip that thread silently — do not crash"
+
+  - id: R07
+    when: "textforums doctor --threshold <N> is called"
+    shall: "use N as the stale_days threshold for this invocation, overriding config"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Add `textforums doctor` command. Reads all open threads, computes age from
+    created timestamp, emits OLD_THREAD lines for threads exceeding threshold.
+    Exits 1 if any found, 0 if clean.
+
+  modules:
+    - path: src/textworkspace/forums.py
+      role: "Add forums_doctor command. Add _get_stale_days() config helper."
+    - path: tests/test_forums.py
+      role: "Tests covering threshold, config override, non-open skip, parse error."
+
+  data_structures:
+    _get_stale_days:
+      signature: "def _get_stale_days() -> int"
+      logic: |
+        try:
+            from textworkspace.config import load_config
+            cfg = load_config()
+            val = cfg.forums.get("stale_days")
+            if isinstance(val, int) and val > 0:
+                return val
+        except Exception:
+            pass
+        return 14
+
+    _thread_age_days:
+      signature: "def _thread_age_days(thread: Thread) -> int | None"
+      logic: |
+        try:
+            created = datetime.fromisoformat(thread.meta.created.replace("Z", "+00:00"))
+            delta = datetime.now(timezone.utc) - created
+            return delta.days
+        except Exception:
+            return None
+
+  sequence: |
+    1. root = get_root()
+    2. threshold = --threshold arg if supplied, else _get_stale_days()
+    3. threads = list_threads(root, status="open")
+    4. stale = []
+    5. for thread in threads:
+           age = _thread_age_days(thread)
+           if age is None: continue  # R06
+           if age >= threshold:
+               slug = thread.path.parent.name
+               stale.append((slug, age))
+               click.echo(f"OLD_THREAD {slug} {age}")
+    6. sys.exit(1) if stale else sys.exit(0)
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: helper-functions
+    mode: implement
+    satisfies: [R04, R06]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py, add after _now_iso():
+      1. _get_stale_days() per design.data_structures._get_stale_days
+      2. _thread_age_days(thread) per design.data_structures._thread_age_days
+      Import sys at top of file if not already present.
+    check:
+      - "WHEN _thread_age_days is called with a thread created 20 days ago, THE SYSTEM SHALL return 20"
+      - "WHEN _thread_age_days is called with an unparseable created field, THE SYSTEM SHALL return None"
+
+  - id: T02
+    name: forums-doctor-command
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R07]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py, add after forums_reopen (or end of CLI commands):
+
+        @forums.command("doctor")
+        @click.option("--threshold", "-n", default=None, type=int,
+                      help="Age in days before a thread is considered stale (default: 14 or config).")
+        def forums_doctor(threshold: int | None) -> None:
+            """Check for open threads that have gone stale. Exits 1 if any found."""
+            import sys
+            root = get_root()
+            stale_days = threshold if threshold is not None else _get_stale_days()
+            threads = list_threads(root, status="open")
+            stale: list[tuple[str, int]] = []
+            for thread in threads:
+                age = _thread_age_days(thread)
+                if age is None:
+                    continue
+                if age >= stale_days:
+                    slug = thread.path.parent.name
+                    stale.append((slug, age))
+                    click.echo(f"OLD_THREAD {slug} {age}")
+            sys.exit(1 if stale else 0)
+    check:
+      - "WHEN one open thread is 20 days old and threshold is 14, THE SYSTEM SHALL print 'OLD_THREAD <slug> 20' and exit 1"
+      - "WHEN all open threads are under threshold, THE SYSTEM SHALL print nothing and exit 0"
+      - "WHEN --threshold 30 is passed, THE SYSTEM SHALL use 30 as the threshold"
+      - "WHEN a resolved thread is 100 days old, THE SYSTEM SHALL not emit an OLD_THREAD line for it"
+
+  - id: T03
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07]
+    status: pending
+    do: |
+      In tests/test_forums.py add:
+      - test_thread_age_days_correct: thread with created 20 days ago → _thread_age_days returns 20
+      - test_thread_age_days_bad_timestamp: garbage created field → returns None
+      - test_doctor_finds_stale_thread: open thread 20 days old, threshold 14 → exit 1, OLD_THREAD line printed
+      - test_doctor_fresh_thread_ok: open thread 5 days old, threshold 14 → exit 0, no output
+      - test_doctor_skips_resolved: resolved thread 30 days old → not in output
+      - test_doctor_threshold_override: --threshold 30 with 20-day-old thread → exit 0 (under threshold)
+      - test_doctor_config_stale_days: monkeypatch _get_stale_days to return 7 → 10-day-old thread is stale
+      - test_doctor_bad_timestamp_skipped: thread with bad created → no crash, not in output
+      Use monkeypatch to control datetime.now() or set created timestamps relative to a known date.
+      Recommended: set thread.meta.created to a fixed ISO string computed as (now - timedelta(days=N)).
+    check:
+      - "WHEN pytest tests/test_forums.py -v -k doctor is run, THE SYSTEM SHALL show 8 passed"
+
+  - id: T04
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: textforums doctor command (OLD_THREAD stale output)'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

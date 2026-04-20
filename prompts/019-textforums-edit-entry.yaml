@@ -1,0 +1,187 @@
+id: "019"
+title: "textforums edit-entry — amend a specific entry by index without touching the whole file"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.75
+depends_on: []
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "How are entries indexed in the current show output?"
+      answer: |
+        forums_show prints entries as '--- [1] author @ timestamp ---' (1-based).
+        The user naturally thinks in terms of these 1-based indices.
+        edit-entry uses the same 1-based index. Index 0 is invalid.
+
+    - id: U02
+      question: "What fields should be editable? Content only, or also status/author?"
+      answer: |
+        Content only. Status and author are set at creation time and serve as an
+        audit trail. Editing them silently would corrupt thread history. If a user
+        needs to change status, they use `textforums add` with a status tag.
+
+    - id: U03
+      question: "Should edit-entry use $EDITOR or accept --content on the command line?"
+      answer: |
+        Both, consistent with add/new. If --content is not supplied, open $EDITOR
+        pre-populated with the current content. If --content is supplied, replace
+        directly without opening an editor.
+
+    - id: U04
+      question: "Should the edit be logged anywhere (timestamp update, edit marker)?"
+      answer: |
+        Update entry.timestamp to the current time to reflect when it was last edited.
+        No separate edit history. This is consistent with the thread being a mutable
+        living document rather than an immutable log.
+
+  findings: |
+    Entry.content is a plain string. The editor helper _open_in_editor(initial_text)
+    already exists and returns the edited string. Re-use it directly.
+
+    Thread entries are a list; replacing by index is list[index-1] = new_entry.
+    The Entry dataclass is mutable — we can update fields in place rather than
+    constructing a new Entry, which preserves files and other fields.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "textforums edit-entry <slug> <index> is called"
+    shall: "open $EDITOR pre-populated with the current entry content and replace it on save"
+
+  - id: R02
+    when: "--content <text> is supplied"
+    shall: "replace entry content directly without opening $EDITOR"
+
+  - id: R03
+    when: "the index is less than 1 or greater than the number of entries"
+    shall: "print '[ERROR] Entry index out of range (1-N).' and exit 1 without modifying the thread"
+
+  - id: R04
+    when: "the slug does not exist"
+    shall: "raise ClickException 'Thread <slug> not found.' and exit 1"
+
+  - id: R05
+    when: "the entry content is saved"
+    shall: "update entry.timestamp to the current UTC time"
+
+  - id: R06
+    when: "the user saves without changing content (editor exits with identical content)"
+    shall: "still save the thread — do not implement a no-op skip (keeps timestamp consistent)"
+
+  - id: R07
+    when: "the thread has zero entries"
+    shall: "print '[ERROR] Thread has no entries.' and exit 1"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Add `textforums edit-entry <slug> <index>` command. Load thread, validate index,
+    open editor (or use --content), update entry content + timestamp, save.
+
+  modules:
+    - path: src/textworkspace/forums.py
+      role: "Add forums_edit_entry command."
+    - path: tests/test_forums.py
+      role: "Tests covering index validation, content replacement, timestamp update, editor path."
+
+  sequence: |
+    1. root = get_root()
+    2. thread = load_thread(root, slug) — ClickException if not found (R04)
+    3. if not thread.entries:
+           raise ClickException("Thread has no entries.") (R07)
+    4. if index < 1 or index > len(thread.entries):
+           raise ClickException(f"Entry index out of range (1-{len(thread.entries)}).") (R03)
+    5. entry = thread.entries[index - 1]
+    6. if content is None:
+           new_content = _open_in_editor(entry.content).strip() (R01)
+       else:
+           new_content = content (R02)
+    7. entry.content = new_content
+    8. entry.timestamp = _now_iso() (R05, R06)
+    9. save_thread(thread)
+    10. click.echo(f"Entry [{index}] updated.")
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: edit-entry-command
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07]
+    status: pending
+    do: |
+      In src/textworkspace/forums.py, add after forums_edit:
+
+        @forums.command("edit-entry")
+        @click.argument("slug")
+        @click.argument("index", type=int)
+        @click.option("--content", "-c", default=None, help="New content. Opens $EDITOR if omitted.")
+        def forums_edit_entry(slug: str, index: int, content: str | None) -> None:
+            """Replace the content of a specific entry (1-based index)."""
+            root = get_root()
+            try:
+                thread = load_thread(root, slug)
+            except FileNotFoundError:
+                raise click.ClickException(f"Thread '{slug}' not found.")
+            if not thread.entries:
+                raise click.ClickException("Thread has no entries.")
+            if index < 1 or index > len(thread.entries):
+                raise click.ClickException(
+                    f"Entry index out of range (1-{len(thread.entries)})."
+                )
+            entry = thread.entries[index - 1]
+            if content is None:
+                new_content = _open_in_editor(entry.content).strip()
+            else:
+                new_content = content
+            entry.content = new_content
+            entry.timestamp = _now_iso()
+            save_thread(thread)
+            click.echo(f"Entry [{index}] updated.")
+    check:
+      - "WHEN edit-entry slug 1 --content 'new text' is called, THE SYSTEM SHALL update entries[0].content to 'new text'"
+      - "WHEN index is 0, THE SYSTEM SHALL exit with out-of-range error"
+      - "WHEN index exceeds entry count, THE SYSTEM SHALL exit with out-of-range error"
+      - "WHEN thread has no entries, THE SYSTEM SHALL exit with 'Thread has no entries.' error"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07]
+    status: pending
+    do: |
+      In tests/test_forums.py add:
+      - test_edit_entry_content_flag: edit-entry slug 1 --content 'updated' → entry.content == 'updated'
+      - test_edit_entry_updates_timestamp: timestamp on entry changes after edit
+      - test_edit_entry_preserves_other_fields: entry.author and entry.files unchanged after edit
+      - test_edit_entry_invalid_index_zero: index 0 → ClickException
+      - test_edit_entry_invalid_index_too_high: index > len(entries) → ClickException with range hint
+      - test_edit_entry_no_entries: thread with no entries → ClickException
+      - test_edit_entry_slug_not_found: nonexistent slug → ClickException
+      - test_edit_entry_editor_path: mock _open_in_editor to return 'edited', check content updated
+      Use tmp_path + save_thread() fixtures.
+    check:
+      - "WHEN pytest tests/test_forums.py -v -k edit_entry is run, THE SYSTEM SHALL show 8 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: textforums edit-entry command'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"
