@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "textworkspace"
 version = "0.4.1"
 description = "Meta CLI and package manager for the Paperworlds text- stack"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "click>=8.0",
     "pyyaml>=6.0",
