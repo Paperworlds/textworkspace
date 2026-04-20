@@ -64,12 +64,20 @@ def get_author(override: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class ThreadLink:
+    rel: str    # e.g. "blocks", "blocked-by", "relates-to"
+    slug: str   # target thread slug
+    note: str = ""
+
+
+@dataclass
 class ThreadMeta:
     title: str
     created: str           # ISO 8601
     author: str
     tags: list[str] = field(default_factory=list)
     status: str = "open"
+    links: list[ThreadLink] = field(default_factory=list)
 
 
 @dataclass
@@ -105,13 +113,16 @@ def slug_from_title(title: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _meta_to_dict(meta: ThreadMeta) -> dict:
-    return {
+    d: dict = {
         "title": meta.title,
         "created": meta.created,
         "author": meta.author,
         "tags": meta.tags,
         "status": meta.status,
     }
+    if meta.links:
+        d["links"] = [{"rel": lnk.rel, "slug": lnk.slug, "note": lnk.note} for lnk in meta.links]
+    return d
 
 
 def _entry_to_dict(entry: Entry) -> dict:
@@ -125,12 +136,18 @@ def _entry_to_dict(entry: Entry) -> dict:
 
 
 def _parse_meta(data: dict) -> ThreadMeta:
+    raw_links = data.get("links") or []
+    links = [
+        ThreadLink(rel=lnk["rel"], slug=lnk["slug"], note=lnk.get("note", ""))
+        for lnk in raw_links
+    ]
     return ThreadMeta(
         title=data["title"],
         created=data["created"],
         author=data["author"],
         tags=data.get("tags") or [],
         status=data.get("status", "open"),
+        links=links,
     )
 
 
@@ -318,7 +335,7 @@ def forums_list(status: str | None, tag: str | None) -> None:
         return
 
     # Table header
-    header = f"{'SLUG':<35} {'STATUS':<10} {'ENTRIES':>7}  {'AGE':<12}  TITLE"
+    header = f"{'SLUG':<35} {'STATUS':<10} {'ENTRIES':>7}  {'LINKS':>5}  {'AGE':<12}  TITLE"
     click.echo(header)
     click.echo("-" * len(header))
 
@@ -332,7 +349,8 @@ def forums_list(status: str | None, tag: str | None) -> None:
             age = f"{days}d" if days > 0 else f"{delta.seconds // 3600}h"
         except Exception:
             age = "?"
-        click.echo(f"{slug:<35} {t.meta.status:<10} {len(t.entries):>7}  {age:<12}  {t.meta.title}")
+        link_count = len(t.meta.links)
+        click.echo(f"{slug:<35} {t.meta.status:<10} {len(t.entries):>7}  {link_count:>5}  {age:<12}  {t.meta.title}")
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +424,11 @@ def forums_show(slug: str, raw: bool) -> None:
     click.echo(f"Created: {m.created}")
     if m.tags:
         click.echo(f"Tags:    {', '.join(m.tags)}")
+    if m.links:
+        click.echo("Links:")
+        for lnk in m.links:
+            note_str = f"  ({lnk.note})" if lnk.note else ""
+            click.echo(f"  {lnk.rel} → {lnk.slug}{note_str}")
     click.echo(f"\n{len(thread.entries)} entr{'y' if len(thread.entries) == 1 else 'ies'}:")
     for i, e in enumerate(thread.entries, 1):
         click.echo(f"\n--- [{i}] {e.author} @ {e.timestamp} ---")
@@ -550,6 +573,75 @@ def forums_search(query: str, status: str | None) -> None:
 
         match_str = ", ".join(match_types)
         click.echo(f"{slug:<35} {match_str:<20}  {thread.meta.title}")
+
+
+# ---------------------------------------------------------------------------
+# forums tags
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# forums link
+# ---------------------------------------------------------------------------
+
+VALID_RELS = ("blocks", "blocked-by", "relates-to")
+
+
+@forums.command("link")
+@click.argument("slug")
+@click.argument("target")
+@click.option("--rel", "-r", default="relates-to",
+              help=f"Relationship type. Common: {', '.join(VALID_RELS)}.")
+@click.option("--note", "-n", default="", help="Optional note about the relationship.")
+def forums_link(slug: str, target: str, rel: str, note: str) -> None:
+    """Add a link from SLUG to TARGET (e.g. blocks, relates-to)."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    # Warn if target doesn't exist, but don't block (target may not exist yet)
+    if not (root / target / _THREAD_FILE).exists():
+        click.echo(f"Warning: target thread '{target}' does not exist.", err=True)
+
+    # Check for duplicate
+    for lnk in thread.meta.links:
+        if lnk.rel == rel and lnk.slug == target:
+            raise click.ClickException(f"Link '{rel} → {target}' already exists on '{slug}'.")
+
+    thread.meta.links.append(ThreadLink(rel=rel, slug=target, note=note))
+    save_thread(thread)
+    click.echo(f"Linked: {slug} --[{rel}]--> {target}")
+
+
+# ---------------------------------------------------------------------------
+# forums unlink
+# ---------------------------------------------------------------------------
+
+@forums.command("unlink")
+@click.argument("slug")
+@click.argument("target")
+@click.option("--rel", "-r", default=None,
+              help="Relationship type to remove. Omit to remove all links to TARGET.")
+def forums_unlink(slug: str, target: str, rel: str | None) -> None:
+    """Remove a link from SLUG to TARGET."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    before = len(thread.meta.links)
+    thread.meta.links = [
+        lnk for lnk in thread.meta.links
+        if not (lnk.slug == target and (rel is None or lnk.rel == rel))
+    ]
+    removed = before - len(thread.meta.links)
+    if removed == 0:
+        raise click.ClickException(f"No matching link to '{target}' found on '{slug}'.")
+
+    save_thread(thread)
+    click.echo(f"Removed {removed} link(s) from '{slug}' to '{target}'.")
 
 
 # ---------------------------------------------------------------------------

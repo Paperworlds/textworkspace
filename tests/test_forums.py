@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from textworkspace.forums import (
     Entry,
     Thread,
+    ThreadLink,
     ThreadMeta,
     add_entry,
     cli,
@@ -624,3 +625,203 @@ def test_forums_tags_sorted_output(tmp_path):
     output_lines = result.output.strip().split("\n")
     assert output_lines[0] == "apple"
     assert output_lines[1] == "zebra"
+
+
+# ---------------------------------------------------------------------------
+# ThreadLink — data model
+# ---------------------------------------------------------------------------
+
+def test_thread_link_round_trip(tmp_path):
+    """ThreadLink survives save/load round-trip."""
+    meta = ThreadMeta(
+        title="Source Thread",
+        created="2026-04-20T10:00:00Z",
+        author="alice",
+        tags=[],
+        status="open",
+        links=[
+            ThreadLink(rel="blocks", slug="target-thread", note="waiting on fix"),
+            ThreadLink(rel="relates-to", slug="another-thread", note=""),
+        ],
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "source-thread" / "thread.yaml")
+    save_thread(thread)
+
+    loaded = load_thread(tmp_path, "source-thread")
+    assert len(loaded.meta.links) == 2
+    assert loaded.meta.links[0].rel == "blocks"
+    assert loaded.meta.links[0].slug == "target-thread"
+    assert loaded.meta.links[0].note == "waiting on fix"
+    assert loaded.meta.links[1].rel == "relates-to"
+    assert loaded.meta.links[1].slug == "another-thread"
+
+
+def test_thread_no_links_omits_field(tmp_path):
+    """Threads with no links serialize without 'links' key."""
+    import yaml
+    thread = _make_thread(tmp_path, slug="no-links")
+    save_thread(thread)
+    raw = yaml.safe_load((tmp_path / "no-links" / "thread.yaml").read_text())
+    assert "links" not in raw["meta"]
+
+
+def test_thread_links_empty_on_load_without_field(tmp_path):
+    """Threads saved without links field deserialize to empty links list."""
+    thread = _make_thread(tmp_path, slug="old-thread")
+    save_thread(thread)
+    loaded = load_thread(tmp_path, "old-thread")
+    assert loaded.meta.links == []
+
+
+# ---------------------------------------------------------------------------
+# forums link CLI
+# ---------------------------------------------------------------------------
+
+def test_forums_link_creates_link(tmp_path):
+    """forums link adds a link to the source thread."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Source", "--content", "src"])
+    runner.invoke(forums, ["new", "--title", "Target", "--content", "tgt"])
+    result = runner.invoke(forums, ["link", "source", "target", "--rel", "blocks"])
+    assert result.exit_code == 0, result.output
+    assert "source --[blocks]--> target" in result.output
+
+    thread = load_thread(tmp_path, "source")
+    assert len(thread.meta.links) == 1
+    assert thread.meta.links[0].rel == "blocks"
+    assert thread.meta.links[0].slug == "target"
+
+
+def test_forums_link_default_rel_is_relates_to(tmp_path):
+    """forums link defaults --rel to 'relates-to'."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Alpha", "--content", "a"])
+    runner.invoke(forums, ["new", "--title", "Beta", "--content", "b"])
+    runner.invoke(forums, ["link", "alpha", "beta"])
+
+    thread = load_thread(tmp_path, "alpha")
+    assert thread.meta.links[0].rel == "relates-to"
+
+
+def test_forums_link_with_note(tmp_path):
+    """forums link stores an optional note."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "a"])
+    runner.invoke(forums, ["new", "--title", "B", "--content", "b"])
+    runner.invoke(forums, ["link", "a", "b", "--rel", "blocks", "--note", "PR #42"])
+
+    thread = load_thread(tmp_path, "a")
+    assert thread.meta.links[0].note == "PR #42"
+
+
+def test_forums_link_duplicate_rejected(tmp_path):
+    """forums link rejects a duplicate (same rel + target) link."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "a"])
+    runner.invoke(forums, ["new", "--title", "B", "--content", "b"])
+    runner.invoke(forums, ["link", "a", "b", "--rel", "blocks"])
+    result = runner.invoke(forums, ["link", "a", "b", "--rel", "blocks"])
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+
+
+def test_forums_link_warns_missing_target(tmp_path):
+    """forums link warns (stderr) when target thread doesn't exist."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Source", "--content", "src"])
+    result = runner.invoke(forums, ["link", "source", "nonexistent", "--rel", "relates-to"], catch_exceptions=False)
+    assert result.exit_code == 0
+    # Check that warning appears in mix_stderr output
+    assert "nonexistent" in result.output
+
+
+def test_forums_link_source_not_found(tmp_path):
+    """forums link fails when source thread doesn't exist."""
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, ["link", "no-such-thread", "other", "--rel", "blocks"])
+    assert result.exit_code != 0
+    assert "not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# forums unlink CLI
+# ---------------------------------------------------------------------------
+
+def test_forums_unlink_removes_link(tmp_path):
+    """forums unlink removes a specific link."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "a"])
+    runner.invoke(forums, ["new", "--title", "B", "--content", "b"])
+    runner.invoke(forums, ["link", "a", "b", "--rel", "blocks"])
+    result = runner.invoke(forums, ["unlink", "a", "b", "--rel", "blocks"])
+    assert result.exit_code == 0, result.output
+    assert "Removed 1 link" in result.output
+
+    thread = load_thread(tmp_path, "a")
+    assert thread.meta.links == []
+
+
+def test_forums_unlink_all_rels_to_target(tmp_path):
+    """forums unlink without --rel removes all links to target."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "a"])
+    runner.invoke(forums, ["new", "--title", "B", "--content", "b"])
+    runner.invoke(forums, ["link", "a", "b", "--rel", "blocks"])
+    runner.invoke(forums, ["link", "a", "b", "--rel", "relates-to"])
+    result = runner.invoke(forums, ["unlink", "a", "b"])
+    assert result.exit_code == 0, result.output
+    assert "Removed 2 link" in result.output
+
+    thread = load_thread(tmp_path, "a")
+    assert thread.meta.links == []
+
+
+def test_forums_unlink_no_match_fails(tmp_path):
+    """forums unlink fails when no matching link exists."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "a"])
+    result = runner.invoke(forums, ["unlink", "a", "nonexistent"])
+    assert result.exit_code != 0
+    assert "No matching link" in result.output
+
+
+# ---------------------------------------------------------------------------
+# forums show — links display
+# ---------------------------------------------------------------------------
+
+def test_forums_show_displays_links(tmp_path):
+    """forums show renders links section."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Source", "--content", "src"])
+    runner.invoke(forums, ["new", "--title", "Target", "--content", "tgt"])
+    runner.invoke(forums, ["link", "source", "target", "--rel", "blocks", "--note", "see #99"])
+    result = runner.invoke(forums, ["show", "source"])
+    assert result.exit_code == 0, result.output
+    assert "Links:" in result.output
+    assert "blocks" in result.output
+    assert "target" in result.output
+    assert "see #99" in result.output
+
+
+def test_forums_show_no_links_omits_section(tmp_path):
+    """forums show omits Links section when thread has no links."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Solo", "--content", "alone"])
+    result = runner.invoke(forums, ["show", "solo"])
+    assert result.exit_code == 0, result.output
+    assert "Links:" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# forums list — link count column
+# ---------------------------------------------------------------------------
+
+def test_forums_list_shows_link_count(tmp_path):
+    """forums list includes a LINKS column."""
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "a"])
+    runner.invoke(forums, ["new", "--title", "B", "--content", "b"])
+    runner.invoke(forums, ["link", "a", "b", "--rel", "blocks"])
+    result = runner.invoke(forums, ["list"])
+    assert result.exit_code == 0, result.output
+    assert "LINKS" in result.output
