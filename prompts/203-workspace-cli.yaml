@@ -1,0 +1,225 @@
+id: "203"
+title: "workspace CLI — tw start/stop + tw workspaces list/status/add/edit"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 1.00
+depends_on: ["202"]
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "How are existing click groups structured in cli.py?"
+      answer: |
+        cli.py uses @main.group() for subgroups (e.g. `tw dev`, `tw repo`).
+        Subcommands are decorated with @<group>.command().
+        WorkspaceManager is instantiated with load_config() inside each command.
+        Pattern: cfg = load_config(); wm = WorkspaceManager(cfg); wm.start(name)
+
+    - id: U02
+      question: "How should tw workspaces add prompt the user interactively?"
+      answer: |
+        Use click.prompt() for each field. profile and name are required (no default).
+        description, project, default_session_name are optional (default="").
+        servers: ask "Server filter type [tags/names/none]" then prompt for values.
+        Append to config.yaml via load_config() + save_config().
+
+  findings: |
+    tw start and tw stop are top-level commands on main (not under a group) —
+    they are the primary UX entry points. tw workspaces is a group for management.
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "tw start <name> is run"
+    shall: "call WorkspaceManager.start(name) and print workspace started confirmation"
+
+  - id: R02
+    when: "tw start <name> <session-name> is run with optional second argument"
+    shall: "pass session_name to WorkspaceManager.start(name, session_name=session_name)"
+
+  - id: R03
+    when: "tw stop <name> is run"
+    shall: "call WorkspaceManager.stop(name)"
+
+  - id: R04
+    when: "tw workspaces list is run"
+    shall: "print a table with columns: name, profile, description, servers"
+
+  - id: R05
+    when: "tw workspaces status is run with an active workspace"
+    shall: "print the active workspace name and started_at"
+
+  - id: R06
+    when: "tw workspaces status is run with no active workspace"
+    shall: "print 'No active workspace.'"
+
+  - id: R07
+    when: "tw workspaces add is run"
+    shall: "interactively prompt for name, profile, description, project, servers, then save to config.yaml"
+
+  - id: R08
+    when: "tw workspaces edit is run"
+    shall: "open config.yaml in $EDITOR (fallback: vi)"
+
+  - id: R09
+    when: "tw start --help or tw stop --help is run"
+    shall: "display usage without error"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Wire WorkspaceManager into cli.py. Add tw start, tw stop as top-level commands.
+    Add tw workspaces group with list, status, add, edit subcommands.
+    All commands load config via load_config() and instantiate WorkspaceManager.
+
+  modules:
+    - path: src/textworkspace/cli.py
+      role: "Add tw start, tw stop, tw workspaces group."
+    - path: tests/test_cli.py
+      role: "Smoke tests for new commands."
+
+  sequence:
+    tw_start: |
+      @main.command("start")
+      @click.argument("name")
+      @click.argument("session_name", required=False, default=None)
+      def workspace_start(name: str, session_name: str | None) -> None:
+          """Start a workspace: switch profile, start servers, open session."""
+          cfg = load_config()
+          WorkspaceManager(cfg).start(name, session_name=session_name)
+
+    tw_stop: |
+      @main.command("stop")
+      @click.argument("name")
+      def workspace_stop(name: str) -> None:
+          """Stop a workspace's servers."""
+          cfg = load_config()
+          WorkspaceManager(cfg).stop(name)
+
+    tw_workspaces: |
+      @main.group("workspaces")
+      def workspaces_cmd() -> None:
+          """Manage workspace definitions."""
+
+      @workspaces_cmd.command("list")
+      def workspaces_list() -> None:
+          cfg = load_config()
+          wss = WorkspaceManager(cfg).list()
+          if not wss:
+              click.echo("No workspaces configured.")
+              return
+          for ws in wss:
+              servers = (
+                  "tags:" + ",".join(ws.servers.tags) if ws.servers.tags
+                  else "names:" + ",".join(ws.servers.names) if ws.servers.names
+                  else "—"
+              )
+              click.echo(f"  {ws.name:<20} {ws.profile:<15} {servers:<25} {ws.description}")
+
+      @workspaces_cmd.command("status")
+      def workspaces_status() -> None:
+          cfg = load_config()
+          state = WorkspaceManager(cfg).status()
+          if state:
+              click.echo(f"Active workspace: {state['active_workspace']}")
+              click.echo(f"Started at:       {state['started_at']}")
+          else:
+              click.echo("No active workspace.")
+
+      @workspaces_cmd.command("add")
+      def workspaces_add() -> None:
+          """Add a new workspace interactively."""
+          name = click.prompt("Workspace name")
+          profile = click.prompt("Profile")
+          description = click.prompt("Description", default="")
+          project = click.prompt("Project path (optional)", default="")
+          default_session_name = click.prompt("Default session name (optional)", default="")
+          filter_type = click.prompt("Server filter type", type=click.Choice(["tags", "names", "none"]), default="none")
+          tags, names = [], []
+          if filter_type == "tags":
+              tags = click.prompt("Tags (comma-separated)").split(",")
+          elif filter_type == "names":
+              names = click.prompt("Server names (comma-separated)").split(",")
+          from textworkspace.config import ServersConfig, WorkspaceConfig, load_config, save_config
+          cfg = load_config()
+          cfg.workspaces[name] = WorkspaceConfig(
+              name=name, profile=profile, description=description,
+              project=project, default_session_name=default_session_name,
+              servers=ServersConfig(tags=[t.strip() for t in tags], names=[n.strip() for n in names]),
+          )
+          save_config(cfg)
+          click.echo(f"Workspace '{name}' added.")
+
+      @workspaces_cmd.command("edit")
+      def workspaces_edit() -> None:
+          """Open config.yaml in $EDITOR."""
+          import os, subprocess
+          from textworkspace.config import config_path
+          editor = os.environ.get("EDITOR", "vi")
+          subprocess.run([editor, str(config_path())])
+
+  note_on_config_path: |
+    Expose a config_path() helper from config.py if not already present:
+      def config_path() -> Path:
+          return Path.home() / ".config" / "paperworlds" / "config.yaml"
+    Check if it exists before adding.
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: cli-commands
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09]
+    status: pending
+    do: |
+      In src/textworkspace/cli.py:
+      1. Import WorkspaceManager from textworkspace.workspace at top of file.
+      2. Add tw start command per design.sequence.tw_start (after existing top-level commands).
+      3. Add tw stop command per design.sequence.tw_stop.
+      4. Add tw workspaces group + list/status/add/edit subcommands per design.sequence.tw_workspaces.
+      5. If config_path() does not exist in config.py, add it (see design.note_on_config_path).
+    check:
+      - "WHEN tw start --help is run, THE SYSTEM SHALL show usage without error"
+      - "WHEN tw stop --help is run, THE SYSTEM SHALL show usage without error"
+      - "WHEN tw workspaces --help is run, THE SYSTEM SHALL show list/status/add/edit subcommands"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R08, R09]
+    status: pending
+    do: |
+      In tests/test_cli.py, add smoke tests:
+      - test_start_help: runner.invoke(main, ["start", "--help"]) → exit_code 0
+      - test_stop_help: runner.invoke(main, ["stop", "--help"]) → exit_code 0
+      - test_workspaces_list_empty: no workspaces in config → "No workspaces configured."
+      - test_workspaces_status_none: no state.yaml → "No active workspace."
+      - test_workspaces_list_shows_entries: config with 1 workspace → name appears in output
+
+      Monkeypatch load_config() to return a minimal Config; monkeypatch
+      WorkspaceManager.start/stop to avoid real subprocess calls.
+    check:
+      - "WHEN pytest tests/test_cli.py -v -k workspace is run, THE SYSTEM SHALL show 5 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: workspace CLI — tw start/stop, tw workspaces group'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

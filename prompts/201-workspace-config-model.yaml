@@ -1,0 +1,221 @@
+id: "201"
+title: "workspace config model — WorkspaceConfig + ServersConfig dataclasses in config.py"
+repo: textworkspace
+model: haiku
+phase: textworkspace
+budget_usd: 0.75
+depends_on: []
+supersedes: ["010"]
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "How is the existing Config dataclass structured and loaded?"
+      answer: |
+        Config is a dataclass in config.py with fields: repos, tools, combos, forums.
+        load_config() reads ~/.config/paperworlds/config.yaml and returns a Config.
+        Each section is parsed by a dedicated _parse_* helper. The YAML is loaded with
+        yaml.safe_load; missing top-level keys default to empty dicts/lists.
+
+    - id: U02
+      question: "How should validation errors be raised?"
+      answer: |
+        At parse time, raise ValueError with a message naming the offending workspace.
+        e.g. "workspace 'data': tags and names are mutually exclusive"
+             "workspace 'data': profile is required"
+        This is caught by callers and surfaced as a click.ClickException.
+
+  findings: |
+    config.py already has the pattern: _parse_forums(), _parse_tools(), etc.
+    ServersConfig and WorkspaceConfig follow the same pattern.
+    Workspaces live under a top-level `workspaces:` key in config.yaml.
+
+    Example config.yaml section:
+      workspaces:
+        data:
+          description: "Data work — Snowflake, Airflow, Airbyte"
+          profile: work
+          servers:
+            tags: [data]
+          project: ~/projects/personal/data-work
+          default_session_name: "data"
+        personal:
+          description: "Personal hacking"
+          profile: personal
+          servers:
+            names: [snowflake]
+          project: ~/projects/personal
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "a valid workspaces YAML block is loaded"
+    shall: "populate all WorkspaceConfig fields correctly including nested ServersConfig"
+
+  - id: R02
+    when: "servers.tags and servers.names are both set in a workspace"
+    shall: "raise ValueError naming the workspace: 'workspace <name>: tags and names are mutually exclusive'"
+
+  - id: R03
+    when: "profile is empty or absent in a workspace entry"
+    shall: "raise ValueError naming the workspace: 'workspace <name>: profile is required'"
+
+  - id: R04
+    when: "workspaces key is absent from config.yaml"
+    shall: "load cleanly with Config.workspaces == {}"
+
+  - id: R05
+    when: "a workspace has no servers key"
+    shall: "default to ServersConfig with empty tags and names lists"
+
+  - id: R06
+    when: "Config is serialised back to dict (save_config)"
+    shall: "include workspaces section with all fields round-tripped correctly"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    Add ServersConfig and WorkspaceConfig dataclasses to config.py.
+    Add _parse_workspaces() and _workspaces_to_dict() helpers.
+    Extend Config dataclass and wire into load_config() / _config_to_dict().
+
+  modules:
+    - path: src/textworkspace/config.py
+      role: "Add dataclasses, parsers, serialisers, wire into Config."
+    - path: tests/test_config.py
+      role: "Tests for parsing, validation, round-trip, missing-key defaults."
+
+  data_structures:
+    ServersConfig: |
+      @dataclass
+      class ServersConfig:
+          tags: list[str] = field(default_factory=list)
+          names: list[str] = field(default_factory=list)
+
+    WorkspaceConfig: |
+      @dataclass
+      class WorkspaceConfig:
+          name: str                        # key from YAML, injected at parse time
+          profile: str                     # required, non-empty
+          servers: ServersConfig = field(default_factory=ServersConfig)
+          description: str = ""
+          project: str = ""               # expanded with Path.expanduser() at use time
+          default_session_name: str = ""
+
+    _parse_workspaces: |
+      def _parse_workspaces(data: dict) -> dict[str, WorkspaceConfig]:
+          result = {}
+          for name, raw in data.items():
+              raw = raw or {}
+              profile = raw.get("profile", "")
+              if not profile:
+                  raise ValueError(f"workspace '{name}': profile is required")
+              servers_raw = raw.get("servers") or {}
+              tags = servers_raw.get("tags") or []
+              names_list = servers_raw.get("names") or []
+              if tags and names_list:
+                  raise ValueError(
+                      f"workspace '{name}': tags and names are mutually exclusive"
+                  )
+              result[name] = WorkspaceConfig(
+                  name=name,
+                  profile=profile,
+                  servers=ServersConfig(tags=tags, names=names_list),
+                  description=raw.get("description", ""),
+                  project=raw.get("project", ""),
+                  default_session_name=raw.get("default_session_name", ""),
+              )
+          return result
+
+    _workspaces_to_dict: |
+      def _workspaces_to_dict(workspaces: dict[str, WorkspaceConfig]) -> dict:
+          out = {}
+          for name, ws in workspaces.items():
+              d: dict = {"profile": ws.profile}
+              if ws.description:
+                  d["description"] = ws.description
+              if ws.project:
+                  d["project"] = ws.project
+              if ws.default_session_name:
+                  d["default_session_name"] = ws.default_session_name
+              servers: dict = {}
+              if ws.servers.tags:
+                  servers["tags"] = ws.servers.tags
+              if ws.servers.names:
+                  servers["names"] = ws.servers.names
+              if servers:
+                  d["servers"] = servers
+              out[name] = d
+          return out
+
+  config_wiring: |
+    In Config dataclass, add:
+      workspaces: dict[str, WorkspaceConfig] = field(default_factory=dict)
+
+    In load_config(), add:
+      workspaces=_parse_workspaces(data.get("workspaces") or {}),
+
+    In _config_to_dict(), add:
+      if cfg.workspaces:
+          d["workspaces"] = _workspaces_to_dict(cfg.workspaces)
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: dataclasses-and-helpers
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06]
+    status: pending
+    do: |
+      In src/textworkspace/config.py:
+      1. Add ServersConfig dataclass (after existing dataclasses).
+      2. Add WorkspaceConfig dataclass.
+      3. Add _parse_workspaces() function per design.data_structures._parse_workspaces.
+      4. Add _workspaces_to_dict() function per design.data_structures._workspaces_to_dict.
+      5. Add `workspaces: dict[str, WorkspaceConfig] = field(default_factory=dict)` to Config.
+      6. In load_config(), add workspaces= line per design.config_wiring.
+      7. In _config_to_dict() (or equivalent save helper), add workspaces emit per design.config_wiring.
+    check:
+      - "WHEN a config YAML with a valid workspaces block is loaded, THE SYSTEM SHALL return correct WorkspaceConfig objects"
+      - "WHEN tags and names are both set, THE SYSTEM SHALL raise ValueError"
+      - "WHEN profile is missing, THE SYSTEM SHALL raise ValueError"
+      - "WHEN workspaces key is absent, THE SYSTEM SHALL return Config with workspaces={}"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06]
+    status: pending
+    do: |
+      In tests/test_config.py (create if missing), add:
+      - test_parse_workspaces_valid: full valid YAML block → all fields populated
+      - test_parse_workspaces_tags_and_names_raises: both set → ValueError with workspace name
+      - test_parse_workspaces_missing_profile_raises: profile absent → ValueError with workspace name
+      - test_parse_workspaces_missing_key: no workspaces key → workspaces == {}
+      - test_parse_workspaces_no_servers: no servers key → ServersConfig with empty lists
+      - test_workspaces_round_trip: load → save → reload → same WorkspaceConfig values
+      Use yaml.dump / yaml.safe_load directly; no real file I/O needed.
+    check:
+      - "WHEN pytest tests/test_config.py -v -k workspace is run, THE SYSTEM SHALL show 6 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: WorkspaceConfig + ServersConfig data model in config.py'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"

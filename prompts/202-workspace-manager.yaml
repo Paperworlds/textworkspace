@@ -1,0 +1,270 @@
+id: "202"
+title: "WorkspaceManager — start/stop/list/status + env propagation + state.yaml"
+repo: textworkspace
+model: sonnet
+phase: textworkspace
+budget_usd: 1.50
+depends_on: ["201"]
+
+# ---------------------------------------------------------------------------
+# EXPLORE
+# ---------------------------------------------------------------------------
+
+explore:
+  unknowns:
+    - id: U01
+      question: "Does mcpf start on an already-running server crash or exit cleanly?"
+      answer: |
+        mcpf start on an already-running server prints a warning and exits 0.
+        Safe to call unconditionally — no pre-check needed.
+
+    - id: U02
+      question: "textaccounts env_for_profile — return type and error behaviour?"
+      answer: |
+        Returns Path (the CLAUDE_CONFIG_DIR for that profile).
+        Raises ProfileNotFoundError (subclass of ValueError) for unknown profiles.
+        WorkspaceManager must catch this and treat it as a degraded-tool warning,
+        not a hard abort.
+
+    - id: U03
+      question: "textaccounts switch vs env_for_profile — which to use from a subprocess context?"
+      answer: |
+        switch sets CLAUDE_CONFIG_DIR in the calling fish shell via eval wrapper.
+        From a subprocess, use env_for_profile() to get the path, then inject
+        CLAUDE_CONFIG_DIR manually into the subprocess env. Do both:
+        1. shell out `textaccounts switch <profile>` for the user's shell state
+        2. resolve the dir via env_for_profile() for mcpf's env
+
+  findings: |
+    Degradation principle: each tool call is isolated in try/except.
+    FileNotFoundError → tool not on PATH → warn + skip.
+    CalledProcessError → tool failed → warn + skip.
+    Only unknown workspace name is a hard abort (click.UsageError).
+
+    Pattern:
+      try:
+          subprocess.run([bin, *args], check=True, env=env)
+      except FileNotFoundError:
+          click.echo(f"[WARN] {tool} not found — skipping", err=True)
+      except subprocess.CalledProcessError as e:
+          click.echo(f"[WARN] {tool} failed ({e.returncode}) — skipping", err=True)
+
+# ---------------------------------------------------------------------------
+# REQUIREMENTS
+# ---------------------------------------------------------------------------
+
+requirements:
+  - id: R01
+    when: "start() is called with an unknown workspace name"
+    shall: "raise click.UsageError naming the unknown workspace"
+
+  - id: R02
+    when: "start() is called with a valid workspace"
+    shall: "invoke profile switch, then server start, then session open — in that order"
+
+  - id: R03
+    when: "textaccounts is not on PATH during start()"
+    shall: "print '[WARN] textaccounts not found — skipping' and continue with remaining steps"
+
+  - id: R04
+    when: "mcpf is not on PATH during start()"
+    shall: "print '[WARN] mcpf not found — skipping' and continue with remaining steps"
+
+  - id: R05
+    when: "textsessions is not on PATH during start()"
+    shall: "print '[WARN] textsessions not found — skipping' and continue with remaining steps"
+
+  - id: R06
+    when: "workspace project path does not exist on disk during start()"
+    shall: "print a warning and continue — server start and state write still complete"
+
+  - id: R07
+    when: "mcpf is invoked by start()"
+    shall: "receive CLAUDE_CONFIG_DIR set to the active profile's config dir in subprocess env"
+
+  - id: R08
+    when: "start() completes without aborting"
+    shall: "write active_workspace and started_at (ISO-8601 UTC) to ~/.config/paperworlds/state.yaml"
+
+  - id: R09
+    when: "stop() is called"
+    shall: "stop the workspace's servers and clear active_workspace from state.yaml"
+
+  - id: R10
+    when: "stop() is called"
+    shall: "not touch the active profile — profile state is user-controlled"
+
+  - id: R11
+    when: "workspace has a default_session_name and no session-name override is given"
+    shall: "pass default_session_name to textsessions new --name"
+
+  - id: R12
+    when: "an explicit session_name argument is passed to start()"
+    shall: "use it instead of default_session_name"
+
+# ---------------------------------------------------------------------------
+# DESIGN
+# ---------------------------------------------------------------------------
+
+design:
+  overview: |
+    New file src/textworkspace/workspace.py. WorkspaceManager takes a Config
+    and implements start(), stop(), list(), status(). State is persisted to
+    ~/.config/paperworlds/state.yaml. Each tool call follows the degradation
+    pattern — warn and skip, never crash on a missing tool.
+
+  modules:
+    - path: src/textworkspace/workspace.py
+      role: "WorkspaceManager class + _read_state/_write_state helpers. New file."
+    - path: tests/test_workspace.py
+      role: "All tests for WorkspaceManager. New file."
+
+  data_structures:
+    StateFile:
+      path: "~/.config/paperworlds/state.yaml"
+      schema: |
+        active_workspace: <name>   # str | absent
+        started_at: <iso8601>      # str | absent
+
+    WorkspaceManager: |
+      class WorkspaceManager:
+          def __init__(self, cfg: Config) -> None: ...
+          def start(self, name: str, session_name: str | None = None) -> None: ...
+          def stop(self, name: str) -> None: ...
+          def list(self) -> list[WorkspaceConfig]: ...
+          def status(self) -> dict | None: ...
+
+  sequence:
+    start: |
+      1. ws = cfg.workspaces.get(name) → UsageError if missing (R01)
+      2. profile_dir = None
+         try:
+             from textworkspace.integrations import textaccounts_env_for_profile
+             profile_dir = textaccounts_env_for_profile(ws.profile)
+             subprocess.run(["textaccounts", "switch", ws.profile], check=True)
+         except FileNotFoundError:
+             click.echo("[WARN] textaccounts not found — skipping", err=True)
+         except Exception:
+             click.echo("[WARN] textaccounts failed — skipping", err=True)
+      3. env = {**os.environ, "CLAUDE_CONFIG_DIR": str(profile_dir)} if profile_dir else os.environ
+      4. if ws.servers.tags:
+             _run_tool("mcpf", ["mcpf", "start", "--tag", *ws.servers.tags], env=env)
+         elif ws.servers.names:
+             _run_tool("mcpf", ["mcpf", "start", *ws.servers.names], env=env)
+      5. if ws.project:
+             project = Path(ws.project).expanduser()
+             if project.exists():
+                 sname = session_name or ws.default_session_name or None
+                 args = ["textsessions", "new", "--project", str(project)]
+                 if sname: args += ["--name", sname]
+                 _run_tool("textsessions", args)
+             else:
+                 click.echo(f"[WARN] project dir not found: {project} — skipping", err=True)
+      6. _write_state(active_workspace=name, started_at=utcnow)
+      7. click.echo(f"Workspace '{name}' started.")
+
+    stop: |
+      1. ws = cfg.workspaces.get(name) → UsageError if missing
+      2. if ws.servers.tags:
+             _run_tool("mcpf", ["mcpf", "stop", "--tag", *ws.servers.tags])
+         elif ws.servers.names:
+             _run_tool("mcpf", ["mcpf", "stop", *ws.servers.names])
+      3. _write_state(active_workspace=None, started_at=None)
+      4. click.echo(f"Workspace '{name}' stopped.")
+      # No profile touch (R10)
+
+    _run_tool: |
+      def _run_tool(label: str, args: list[str], env=None) -> None:
+          try:
+              subprocess.run(args, check=True, env=env)
+          except FileNotFoundError:
+              click.echo(f"[WARN] {label} not found — skipping", err=True)
+          except subprocess.CalledProcessError as e:
+              click.echo(f"[WARN] {label} failed ({e.returncode}) — skipping", err=True)
+
+    _read_state: |
+      STATE_FILE = Path.home() / ".config" / "paperworlds" / "state.yaml"
+
+      def _read_state() -> dict:
+          if STATE_FILE.exists():
+              return yaml.safe_load(STATE_FILE.read_text()) or {}
+          return {}
+
+    _write_state: |
+      def _write_state(**kwargs) -> None:
+          state = _read_state()
+          for k, v in kwargs.items():
+              if v is None:
+                  state.pop(k, None)
+              else:
+                  state[k] = v
+          STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+          STATE_FILE.write_text(yaml.dump(state))
+
+  note_on_textaccounts_import: |
+    textaccounts is an external tool. Call it via subprocess (`textaccounts switch`)
+    and via its Python API for env_for_profile if available. Wrap both in try/except
+    FileNotFoundError so the whole class works even without textaccounts installed.
+    Do NOT add textaccounts as a hard dependency in pyproject.toml.
+
+# ---------------------------------------------------------------------------
+# TASKS
+# ---------------------------------------------------------------------------
+
+tasks:
+  - id: T01
+    name: workspace-manager
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R12]
+    status: pending
+    do: |
+      Create src/textworkspace/workspace.py with:
+      1. STATE_FILE constant
+      2. _run_tool(label, args, env=None) helper per design.sequence._run_tool
+      3. _read_state() per design.sequence._read_state
+      4. _write_state(**kwargs) per design.sequence._write_state
+      5. WorkspaceManager class with __init__(cfg), start(name, session_name=None),
+         stop(name), list(), status() per design.sequence
+      Import yaml (already a dep via pyyaml), click, os, subprocess, Path.
+    check:
+      - "WHEN start() is called with unknown name, THE SYSTEM SHALL raise click.UsageError"
+      - "WHEN textaccounts is missing, THE SYSTEM SHALL print [WARN] and continue"
+      - "WHEN mcpf is missing, THE SYSTEM SHALL print [WARN] and continue"
+      - "WHEN textsessions is missing, THE SYSTEM SHALL print [WARN] and continue"
+      - "WHEN project dir is missing, THE SYSTEM SHALL print [WARN] and continue"
+      - "WHEN start() completes, THE SYSTEM SHALL write active_workspace and started_at to state.yaml"
+      - "WHEN stop() completes, THE SYSTEM SHALL clear active_workspace from state.yaml without touching profile"
+
+  - id: T02
+    name: tests
+    mode: implement
+    satisfies: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R12]
+    status: pending
+    do: |
+      Create tests/test_workspace.py with:
+      - test_start_unknown_name: raises click.UsageError
+      - test_start_happy_path: all tools present (monkeypatched subprocess) → called in order
+      - test_start_textaccounts_missing: FileNotFoundError → [WARN] printed, continues
+      - test_start_mcpf_missing: FileNotFoundError on mcpf → [WARN], continues, state written
+      - test_start_textsessions_missing: FileNotFoundError → [WARN], continues, state written
+      - test_start_project_missing: project dir absent → [WARN], state still written
+      - test_start_writes_state: after start(), state.yaml has active_workspace + started_at
+      - test_stop_clears_state: after stop(), active_workspace removed from state.yaml
+      - test_stop_no_profile_switch: stop() must NOT call textaccounts switch
+      - test_env_propagation: mcpf subprocess called with CLAUDE_CONFIG_DIR in env
+      - test_session_name_override: explicit session_name passed → used over default_session_name
+      - test_default_session_name: no override → default_session_name passed to textsessions
+
+      Use tmp_path to override STATE_FILE; monkeypatch subprocess.run.
+      Build minimal Config + WorkspaceConfig fixtures inline.
+    check:
+      - "WHEN pytest tests/test_workspace.py -v is run, THE SYSTEM SHALL show 12 passed"
+
+  - id: T03
+    name: commit
+    mode: implement
+    satisfies: []
+    status: pending
+    do: "git -c commit.gpgsign=false commit -am 'feat: WorkspaceManager — start/stop/state/env propagation'"
+    check:
+      - "WHEN git log --oneline -1 is run, THE SYSTEM SHALL show the feat: commit"
