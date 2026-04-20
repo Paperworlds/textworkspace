@@ -1492,6 +1492,40 @@ def test_r11_api_key_warn(tmp_path, monkeypatch):
     assert warn.status == "warn"
 
 
+# ---------------------------------------------------------------------------
+# _tool_version
+# ---------------------------------------------------------------------------
+
+def test_tool_version_returns_unknown_on_none_path():
+    from textworkspace.cli import _tool_version
+    assert _tool_version("anything", None) == "unknown"
+
+
+def test_tool_version_parses_version_with_hash(monkeypatch):
+    """Regression: version string 'tool, version X.Y.Z (hash)' is parsed correctly."""
+    from textworkspace.cli import _tool_version
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        _sp,
+        "check_output",
+        lambda *a, **kw: "textread, version 0.1.0 (de8d796)\n",
+    )
+    assert _tool_version("textread", "/usr/local/bin/textread") == "0.1.0 (de8d796)"
+
+
+def test_tool_version_returns_unknown_on_timeout(monkeypatch):
+    """Regression: TimeoutExpired after fresh uv install must not crash — return 'unknown'."""
+    from textworkspace.cli import _tool_version
+    import subprocess as _sp
+
+    def _raise(*a, **kw):
+        raise _sp.TimeoutExpired(cmd=["textread", "--version"], timeout=15)
+
+    monkeypatch.setattr(_sp, "check_output", _raise)
+    assert _tool_version("textread", "/usr/local/bin/textread") == "unknown"
+
+
 def test_r12_config_missing_info(tmp_path, monkeypatch):
     """tw doctor emits info when textread.yaml is missing."""
     import textworkspace.doctor as _doc
