@@ -264,6 +264,25 @@ def search_threads(root: Path, query: str, status: str | None = None) -> list[tu
     return results
 
 
+def stale_threads(root: Path, age_days: int = 14) -> list[tuple[str, int]]:
+    """Return (slug, days_since_last_activity) for open threads idle for >= age_days days."""
+    threads = list_threads(root, status="open")
+    now = datetime.now(timezone.utc)
+    result: list[tuple[str, int]] = []
+    for thread in threads:
+        last_ts = thread.meta.created
+        if thread.entries:
+            last_ts = thread.entries[-1].timestamp
+        try:
+            last_activity = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+            days = (now - last_activity).days
+            if days >= age_days:
+                result.append((thread.path.parent.name, days))
+        except Exception:
+            continue
+    return result
+
+
 def list_tags(root: Path) -> list[str]:
     """Return all unique tags from all threads, sorted alphabetically."""
     tags_set: set[str] = set()
@@ -704,3 +723,23 @@ def forums_tags() -> None:
 
     for tag in tags:
         click.echo(tag)
+
+
+# ---------------------------------------------------------------------------
+# forums doctor
+# ---------------------------------------------------------------------------
+
+@forums.command("doctor")
+@click.option("--age-days", default=14, show_default=True, help="Flag threads idle for longer than N days.")
+def forums_doctor(age_days: int) -> None:
+    """Output machine-readable stale-thread diagnostics.
+
+    Prints one line per stale open thread:
+
+        STALE <slug> <days>d
+
+    Consumed by 'tw doctor' to surface long-running open threads.
+    """
+    root = get_root()
+    for slug, days in stale_threads(root, age_days=age_days):
+        click.echo(f"STALE {slug} {days}d")

@@ -300,6 +300,21 @@ def run_doctor_checks() -> list[CheckResult]:
     except Exception:  # noqa: BLE001
         pass
 
+    # --- Forums stale-thread check ---
+    try:
+        from textworkspace.forums import get_root as forums_get_root, stale_threads
+        forums_root = forums_get_root()
+        stale = stale_threads(forums_root)
+        for slug, days in stale:
+            results.append(CheckResult(
+                label=f"forums:{slug}",
+                detail=f"open for {days}d",
+                status="warn",
+                fix=f"textforums close {slug}",
+            ))
+    except Exception:  # noqa: BLE001
+        pass
+
     # --- Proxy check ---
     proxy_port = get_textproxy_port()
     if _is_port_responding(proxy_port):

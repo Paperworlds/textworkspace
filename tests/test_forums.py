@@ -24,6 +24,7 @@ from textworkspace.forums import (
     save_thread,
     search_threads,
     slug_from_title,
+    stale_threads,
     DEFAULT_ROOT,
 )
 from textworkspace.cli import main
@@ -943,3 +944,163 @@ def test_forums_bulk_close_lists_matching_threads(tmp_path):
     assert "bug-two" in result.output
     assert "Bug One" in result.output
     assert "Bug Two" in result.output
+
+
+# ---------------------------------------------------------------------------
+# stale_threads
+# ---------------------------------------------------------------------------
+
+def _make_thread_with_timestamps(root: Path, slug: str, created: str, last_entry_ts: str | None = None) -> Thread:
+    """Create a thread with specific timestamps for staleness testing."""
+    meta = ThreadMeta(
+        title=slug.replace("-", " ").title(),
+        created=created,
+        author="x",
+        tags=[],
+        status="open",
+    )
+    entries = []
+    if last_entry_ts:
+        entries.append(Entry(author="x", timestamp=last_entry_ts, status="", content="reply"))
+    thread = Thread(meta=meta, entries=entries, path=root / slug / "thread.yaml")
+    save_thread(thread)
+    return thread
+
+
+def test_stale_threads_returns_old_open_threads(tmp_path):
+    """stale_threads returns open threads idle for >= age_days days."""
+    _make_thread_with_timestamps(tmp_path, "old-thread", "2020-01-01T00:00:00Z")
+    result = stale_threads(tmp_path, age_days=14)
+    assert len(result) == 1
+    slug, days = result[0]
+    assert slug == "old-thread"
+    assert days > 365  # much older than 14 days
+
+
+def test_stale_threads_excludes_recent_threads(tmp_path):
+    """stale_threads ignores threads active within age_days days."""
+    from datetime import datetime, timezone, timedelta
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _make_thread_with_timestamps(tmp_path, "recent-thread", recent_ts)
+    result = stale_threads(tmp_path, age_days=14)
+    assert result == []
+
+
+def test_stale_threads_excludes_resolved_threads(tmp_path):
+    """stale_threads ignores resolved threads even if old."""
+    meta = ThreadMeta(
+        title="Old Resolved",
+        created="2020-01-01T00:00:00Z",
+        author="x",
+        tags=[],
+        status="resolved",
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "old-resolved" / "thread.yaml")
+    save_thread(thread)
+    result = stale_threads(tmp_path, age_days=14)
+    assert result == []
+
+
+def test_stale_threads_uses_last_entry_timestamp(tmp_path):
+    """stale_threads computes staleness from last entry, not created date."""
+    from datetime import datetime, timezone, timedelta
+    # Thread created long ago but last entry is recent
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _make_thread_with_timestamps(tmp_path, "recent-reply", "2020-01-01T00:00:00Z", last_entry_ts=recent_ts)
+    result = stale_threads(tmp_path, age_days=14)
+    assert result == []
+
+
+def test_stale_threads_empty_root(tmp_path):
+    """stale_threads returns empty list for nonexistent root."""
+    result = stale_threads(tmp_path / "nonexistent", age_days=14)
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# forums doctor CLI
+# ---------------------------------------------------------------------------
+
+def test_forums_doctor_outputs_stale_lines(tmp_path):
+    """forums doctor outputs STALE <slug> <days>d for stale open threads."""
+    runner = _runner(tmp_path)
+    # Create an old thread
+    meta = ThreadMeta(
+        title="Old Bug",
+        created="2020-06-01T00:00:00Z",
+        author="tester",
+        tags=[],
+        status="open",
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "old-bug" / "thread.yaml")
+    save_thread(thread)
+
+    result = runner.invoke(forums, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "STALE old-bug" in result.output
+    assert "d" in result.output  # age in days
+
+
+def test_forums_doctor_no_stale_threads_silent(tmp_path):
+    """forums doctor produces no output when no threads are stale."""
+    from datetime import datetime, timezone, timedelta
+    runner = _runner(tmp_path)
+    recent_ts = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    meta = ThreadMeta(
+        title="Fresh Thread",
+        created=recent_ts,
+        author="tester",
+        tags=[],
+        status="open",
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "fresh-thread" / "thread.yaml")
+    save_thread(thread)
+
+    result = runner.invoke(forums, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == ""
+
+
+def test_forums_doctor_age_days_option(tmp_path):
+    """forums doctor --age-days controls the staleness threshold."""
+    from datetime import datetime, timezone, timedelta
+    runner = _runner(tmp_path)
+    # Thread 5 days old
+    ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    meta = ThreadMeta(
+        title="Mid Age",
+        created=ts,
+        author="tester",
+        tags=[],
+        status="open",
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "mid-age" / "thread.yaml")
+    save_thread(thread)
+
+    # Not stale with default 14-day threshold
+    result = runner.invoke(forums, ["doctor"])
+    assert result.exit_code == 0
+    assert "STALE" not in result.output
+
+    # Stale with 3-day threshold
+    result = runner.invoke(forums, ["doctor", "--age-days", "3"])
+    assert result.exit_code == 0
+    assert "STALE mid-age" in result.output
+
+
+def test_forums_doctor_ignores_resolved_threads(tmp_path):
+    """forums doctor does not flag resolved threads even if old."""
+    runner = _runner(tmp_path)
+    meta = ThreadMeta(
+        title="Old Resolved",
+        created="2020-01-01T00:00:00Z",
+        author="tester",
+        tags=[],
+        status="resolved",
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "old-resolved" / "thread.yaml")
+    save_thread(thread)
+
+    result = runner.invoke(forums, ["doctor"])
+    assert result.exit_code == 0
+    assert "STALE" not in result.output
