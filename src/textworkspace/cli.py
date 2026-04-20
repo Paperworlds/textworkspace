@@ -1380,18 +1380,6 @@ def proxy_setup() -> None:
 # tw repo move <name> <new-path>
 # ---------------------------------------------------------------------------
 
-_CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
-
-
-def _encode_claude_project_path(path: Path) -> str:
-    """Encode an absolute path as a Claude Code project directory name.
-
-    ~/.claude/projects/ dirs use the absolute path with every '/' replaced
-    by '-'. E.g. /Users/foo/bar → -Users-foo-bar.
-    """
-    return str(path).replace("/", "-")
-
-
 @main.group("repo", invoke_without_command=True)
 @click.pass_context
 def repo_cmd(ctx: click.Context) -> None:
@@ -1407,7 +1395,8 @@ def repo_move(name: str, new_path: str) -> None:
     """Update all references when a repo folder moves.
 
     Detects whether the physical move has already happened and asks if not.
-    Updates config.yaml, ~/.claude/projects/, and each installed tool's config.
+    Updates config.yaml and delegates ~/.claude/projects/ renaming to each
+    tool's own repo move (textsessions handles all profile dirs).
     """
     from textworkspace.config import load_config, save_config
     from textworkspace.doctor import detect_installed_tools
@@ -1449,17 +1438,6 @@ def repo_move(name: str, new_path: str) -> None:
     cfg.repos[name].path = str(new_path_resolved)
     save_config(cfg)
     click.echo(f"  config.yaml: {old_path} → {new_path_resolved}")
-
-    # --- Rename ~/.claude/projects/ dir ---
-    old_encoded = _encode_claude_project_path(old_path)
-    new_encoded = _encode_claude_project_path(new_path_resolved)
-    old_proj = _CLAUDE_PROJECTS_DIR / old_encoded
-    new_proj = _CLAUDE_PROJECTS_DIR / new_encoded
-    if old_proj.exists():
-        old_proj.rename(new_proj)
-        click.echo(f"  .claude/projects: {old_encoded} → {new_encoded}")
-    else:
-        click.echo(f"  .claude/projects: no project dir found for old path (skipped)")
 
     # --- Call each installed tool's repo move ---
     tools = detect_installed_tools()

@@ -10,7 +10,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from textworkspace.cli import main, _encode_claude_project_path
+from textworkspace.cli import main
 from textworkspace.config import Config, RepoEntry, save_config
 from textworkspace.doctor import CheckResult, run_doctor_checks
 
@@ -23,15 +23,6 @@ def _write_config(config_dir: Path, repos: dict) -> None:
     data = {"repos": {name: {"path": str(entry["path"]), "label": "", "profile": ""}
                       for name, entry in repos.items()}}
     (config_dir / "config.yaml").write_text(yaml.dump(data))
-
-
-# ---------------------------------------------------------------------------
-# _encode_claude_project_path
-# ---------------------------------------------------------------------------
-
-def test_encode_claude_project_path():
-    path = Path("/Users/paulie/projects/personal/myrepo")
-    assert _encode_claude_project_path(path) == "-Users-paulie-projects-personal-myrepo"
 
 
 # ---------------------------------------------------------------------------
@@ -57,13 +48,9 @@ def test_R02_already_moved(config_dir, tmp_path):
     new.mkdir()  # already moved
 
     _write_config(config_dir, {"myrepo": {"path": str(old)}})
-    claude_projects = tmp_path / "claude_projects"
-    old_encoded = _encode_claude_project_path(old.resolve())
-    (claude_projects / old_encoded).mkdir(parents=True)
 
     runner = CliRunner()
     with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", claude_projects)
         m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
         result = runner.invoke(main, ["repo", "move", "myrepo", str(new)])
 
@@ -81,12 +68,9 @@ def test_R03_confirm_move(config_dir, tmp_path):
     new = tmp_path / "new-repo"
 
     _write_config(config_dir, {"myrepo": {"path": str(old)}})
-    claude_projects = tmp_path / "claude_projects"
-    claude_projects.mkdir()
 
     runner = CliRunner()
     with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", claude_projects)
         m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
         result = runner.invoke(main, ["repo", "move", "myrepo", str(new)], input="y\n")
 
@@ -105,7 +89,6 @@ def test_R03_deny_move(config_dir, tmp_path):
 
     runner = CliRunner()
     with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", tmp_path / "claude")
         m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
         result = runner.invoke(main, ["repo", "move", "myrepo", str(new)], input="n\n")
 
@@ -125,7 +108,6 @@ def test_R04_both_exist(config_dir, tmp_path):
 
     runner = CliRunner()
     with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", tmp_path / "claude")
         m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
         result = runner.invoke(main, ["repo", "move", "myrepo", str(new)])
 
@@ -139,12 +121,9 @@ def test_R05_neither_exists(config_dir, tmp_path):
     new = tmp_path / "new-repo"
 
     _write_config(config_dir, {"myrepo": {"path": str(old)}})
-    claude_projects = tmp_path / "claude_projects"
-    claude_projects.mkdir()
 
     runner = CliRunner()
     with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", claude_projects)
         m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
         result = runner.invoke(main, ["repo", "move", "myrepo", str(new)])
 
@@ -152,54 +131,6 @@ def test_R05_neither_exists(config_dir, tmp_path):
     assert "WARN" in result.output
     loaded = yaml.safe_load((config_dir / "config.yaml").read_text())
     assert loaded["repos"]["myrepo"]["path"] == str(new.resolve())
-
-
-# ---------------------------------------------------------------------------
-# tw repo move — .claude/projects rename
-# ---------------------------------------------------------------------------
-
-def test_R07_claude_project_renamed(config_dir, tmp_path):
-    """~/.claude/projects/<old-encoded>/ is renamed to <new-encoded>/."""
-    new = tmp_path / "new-repo"
-    new.mkdir()
-    old = tmp_path / "old-repo"  # already moved
-
-    _write_config(config_dir, {"myrepo": {"path": str(old)}})
-
-    claude_projects = tmp_path / "claude_projects"
-    old_encoded = _encode_claude_project_path(old.resolve())
-    (claude_projects / old_encoded).mkdir(parents=True)
-
-    runner = CliRunner()
-    with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", claude_projects)
-        m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
-        result = runner.invoke(main, ["repo", "move", "myrepo", str(new)])
-
-    assert result.exit_code == 0
-    new_encoded = _encode_claude_project_path(new.resolve())
-    assert (claude_projects / new_encoded).exists()
-    assert not (claude_projects / old_encoded).exists()
-
-
-def test_R08_no_claude_project(config_dir, tmp_path):
-    """No old project dir → skip silently, print notice."""
-    new = tmp_path / "new-repo"
-    new.mkdir()
-    old = tmp_path / "old-repo"
-
-    _write_config(config_dir, {"myrepo": {"path": str(old)}})
-    claude_projects = tmp_path / "claude_projects"
-    claude_projects.mkdir()  # empty — no project dir
-
-    runner = CliRunner()
-    with pytest.MonkeyPatch().context() as m:
-        m.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", claude_projects)
-        m.setattr("textworkspace.doctor.detect_installed_tools", lambda: {})
-        result = runner.invoke(main, ["repo", "move", "myrepo", str(new)])
-
-    assert result.exit_code == 0
-    assert "skipped" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +161,6 @@ def test_R09_tool_called_and_output_shown(config_dir, tmp_path, monkeypatch):
         m.stderr = ""
         return m
 
-    monkeypatch.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", tmp_path / "claude")
     monkeypatch.setattr("textworkspace.cli.subprocess.run", fake_run)
     monkeypatch.setattr(
         "textworkspace.doctor.detect_installed_tools",
@@ -260,7 +190,6 @@ def test_R10_exit2_skipped_silently(config_dir, tmp_path, monkeypatch):
         m.stderr = ""
         return m
 
-    monkeypatch.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", tmp_path / "claude")
     monkeypatch.setattr("textworkspace.cli.subprocess.run", fake_run)
     monkeypatch.setattr(
         "textworkspace.doctor.detect_installed_tools",
@@ -288,7 +217,6 @@ def test_R11_nonzero_exit_warns(config_dir, tmp_path, monkeypatch):
         m.stderr = "something went wrong"
         return m
 
-    monkeypatch.setattr("textworkspace.cli._CLAUDE_PROJECTS_DIR", tmp_path / "claude")
     monkeypatch.setattr("textworkspace.cli.subprocess.run", fake_run)
     monkeypatch.setattr(
         "textworkspace.doctor.detect_installed_tools",
