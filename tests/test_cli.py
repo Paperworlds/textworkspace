@@ -1546,3 +1546,211 @@ def test_r12_config_missing_info(tmp_path, monkeypatch):
     assert "textread:config" in labels
     info = next(r for r in results if r.label == "textread:config")
     assert info.status == "info"
+
+
+# ---------------------------------------------------------------------------
+# Workspace CLI tests (tw start, tw stop, tw workspaces)
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_start_cli(config_dir, monkeypatch):
+    """tw start <workspace> invokes WorkspaceManager.start()."""
+    from textworkspace.config import Config, WorkspaceConfig, ServersConfig
+
+    cfg = Config()
+    cfg.workspaces = {
+        "data": WorkspaceConfig(
+            name="data",
+            profile="work",
+            servers=ServersConfig(tags=["data"]),
+            description="Data work",
+        )
+    }
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    with patch("textworkspace.workspace.WorkspaceManager.start") as mock_start:
+        runner = CliRunner()
+        result = runner.invoke(main, ["start", "data"])
+        assert result.exit_code == 0
+        mock_start.assert_called_once_with("data", session_name=None, profile=None)
+
+
+def test_workspace_start_cli_with_session_name(config_dir, monkeypatch):
+    """tw start <workspace> <session_name> passes session_name to WorkspaceManager."""
+    from textworkspace.config import Config, WorkspaceConfig, ServersConfig
+
+    cfg = Config()
+    cfg.workspaces = {
+        "data": WorkspaceConfig(
+            name="data",
+            profile="work",
+            servers=ServersConfig(tags=["data"]),
+        )
+    }
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    with patch("textworkspace.workspace.WorkspaceManager.start") as mock_start:
+        runner = CliRunner()
+        result = runner.invoke(main, ["start", "data", "my-session"])
+        assert result.exit_code == 0
+        mock_start.assert_called_once_with("data", session_name="my-session", profile=None)
+
+
+def test_workspace_start_cli_with_profile_override(config_dir, monkeypatch):
+    """tw start <workspace> --profile overrides workspace profile."""
+    from textworkspace.config import Config, WorkspaceConfig, ServersConfig
+
+    cfg = Config()
+    cfg.workspaces = {
+        "data": WorkspaceConfig(
+            name="data",
+            profile="work",
+            servers=ServersConfig(tags=["data"]),
+        )
+    }
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    with patch("textworkspace.workspace.WorkspaceManager.start") as mock_start:
+        runner = CliRunner()
+        result = runner.invoke(main, ["start", "data", "--profile", "personal"])
+        assert result.exit_code == 0
+        mock_start.assert_called_once_with("data", session_name=None, profile="personal")
+
+
+def test_workspace_stop_cli(config_dir, monkeypatch):
+    """tw stop <workspace> invokes WorkspaceManager.stop()."""
+    from textworkspace.config import Config, WorkspaceConfig, ServersConfig
+
+    cfg = Config()
+    cfg.workspaces = {
+        "data": WorkspaceConfig(
+            name="data",
+            profile="work",
+            servers=ServersConfig(tags=["data"]),
+        )
+    }
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    with patch("textworkspace.workspace.WorkspaceManager.stop") as mock_stop:
+        runner = CliRunner()
+        result = runner.invoke(main, ["stop", "data"])
+        assert result.exit_code == 0
+        mock_stop.assert_called_once_with("data")
+
+
+def test_workspaces_list_cli_empty(config_dir, monkeypatch):
+    """tw workspaces list with no workspaces shows appropriate message."""
+    cfg = Config()
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["workspaces", "list"])
+    assert result.exit_code == 0
+    assert "No workspaces configured" in result.output
+
+
+def test_workspaces_list_cli_with_workspaces(config_dir, monkeypatch):
+    """tw workspaces list displays all configured workspaces."""
+    from textworkspace.config import Config, WorkspaceConfig, ServersConfig
+
+    cfg = Config()
+    cfg.workspaces = {
+        "data": WorkspaceConfig(
+            name="data",
+            profile="work",
+            servers=ServersConfig(tags=["data"]),
+            description="Data work",
+        ),
+        "analytics": WorkspaceConfig(
+            name="analytics",
+            profile="work",
+            servers=ServersConfig(names=["dbt-server"]),
+            description="Analytics pipeline",
+        ),
+    }
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["workspaces", "list"])
+    assert result.exit_code == 0
+    assert "data" in result.output
+    assert "Data work" in result.output
+    assert "analytics" in result.output
+    assert "Analytics pipeline" in result.output
+
+
+def test_workspaces_status_cli_no_active(config_dir, monkeypatch, tmp_path):
+    """tw workspaces status with no active workspace."""
+    cfg = Config()
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+    state_file = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", state_file)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["workspaces", "status"])
+    assert result.exit_code == 0
+    assert "No active workspace" in result.output
+
+
+def test_workspaces_status_cli_with_active(config_dir, monkeypatch, tmp_path):
+    """tw workspaces status shows active workspace when one is active."""
+    from textworkspace.workspace import _write_state
+
+    cfg = Config()
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+    state_file = tmp_path / "state.yaml"
+    monkeypatch.setattr("textworkspace.workspace.STATE_FILE", state_file)
+
+    _write_state(active_workspace="data", started_at="2026-04-20T10:00:00Z")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["workspaces", "status"])
+    assert result.exit_code == 0
+    assert "data" in result.output
+    assert "2026-04-20T10:00:00Z" in result.output
+
+
+def test_workspaces_add_cli_interactive(config_dir, monkeypatch):
+    """tw workspaces add prompts for workspace details."""
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    monkeypatch.setattr("textworkspace.cli._HAS_TEXTACCOUNTS", False)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["workspaces", "add"],
+        input="data\nDescription\nwork\n\n\nnone\n",
+    )
+    assert result.exit_code == 0
+    assert "workspace 'data' added" in result.output
+
+    # Verify workspace was saved
+    cfg = load_config()
+    assert "data" in cfg.workspaces
+    assert cfg.workspaces["data"].profile == "work"
+
+
+def test_workspaces_edit_cli_opens_editor(config_dir, monkeypatch):
+    """tw workspaces edit opens CONFIG_FILE in $EDITOR."""
+    cfg = Config()
+    monkeypatch.setattr("textworkspace.config.CONFIG_FILE", config_dir / "config.yaml")
+    save_config(cfg)
+
+    with patch("subprocess.run") as mock_run:
+        monkeypatch.setenv("EDITOR", "vim")
+        runner = CliRunner()
+        result = runner.invoke(main, ["workspaces", "edit"])
+        assert result.exit_code == 0
+        # Check that subprocess.run was called with vim and a config file path
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args[0] == "vim"
+        assert "config.yaml" in call_args[1]
