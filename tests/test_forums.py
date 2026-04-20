@@ -253,7 +253,7 @@ def test_get_author_user_env_last_resort(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _runner(tmp_path: Path) -> CliRunner:
-    return CliRunner(env={"TEXTFORUMS_ROOT": str(tmp_path), "TEXTFORUMS_AUTHOR": "tester"})
+    return CliRunner(env={"TEXTFORUMS_ROOT": str(tmp_path), "TEXTFORUMS_AUTHOR": "tester", "EDITOR": "cat"})
 
 
 # ---------------------------------------------------------------------------
