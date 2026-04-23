@@ -517,6 +517,7 @@ _TOOL_ALIASES: dict[str, list[str]] = {
     "textaccounts": ["ta"],
     "paperagents": ["pp"],
     "textread": [],
+    "textmap": [],
 }
 
 # Tools eligible for `tw shell install`.
@@ -531,6 +532,7 @@ _INSTALLABLE_TOOLS: list[tuple[str, str, list[str], dict[str, str]]] = [
     ("textsessions", "TEXTSESSIONS", ["ts"], {}),
     ("paperagents", "PAPERAGENTS", ["pp"], {}),
     ("textread", "TEXTREAD", [], {}),
+    ("textmap", "TEXTMAP", [], {}),
 ]
 
 
@@ -560,11 +562,12 @@ def aliases() -> None:
 # Python tools that can be installed from local repos.
 # Order matters: dependencies must come first.
 # deps maps tool -> list of other _PYTHON_TOOLS it needs injected via --with-editable.
-_PYTHON_TOOLS = ("textaccounts", "textsessions", "textread", "textworkspace")
+_PYTHON_TOOLS = ("textaccounts", "textsessions", "textread", "textmap", "textworkspace")
 _PYTHON_TOOL_DEPS: dict[str, list[str]] = {
     "textaccounts": [],
     "textsessions": ["textaccounts"],
     "textread": [],
+    "textmap": [],
     "textworkspace": [],
 }
 
