@@ -792,3 +792,53 @@ def forums_doctor(age_days: int) -> None:
     root = get_root()
     for slug, days in stale_threads(root, age_days=age_days):
         click.echo(f"STALE {slug} {days}d")
+
+
+_EXAMPLE_FLOW = """\
+# textforums — typical working flow
+#
+# Threads are YAML files under ~/.textforums/<slug>/thread.yaml.
+# All commands below also work as `tw forums <sub>`.
+
+# 1. See what's open — optionally filtered by tag or full-text query.
+textforums list
+textforums list --status open --tag textworkspace
+textforums list --query "proxy passthrough"
+
+# 2. Start a new thread. Omit --content to open $EDITOR for the first entry.
+textforums new --title "tw proxy status broken" --tag textworkspace --tag bug \\
+    --content "tw proxy status returns 'No such command'. See screenshot."
+
+# 3. Read a thread (use the slug from `list`).
+textforums show tw-proxy-status-broken
+textforums show tw-proxy-status-broken --raw       # dump YAML
+
+# 4. Reply. Omit --content to open $EDITOR. Attach files with --file.
+textforums add tw-proxy-status-broken --content "Reproduced on 0.4.2." --status ack
+textforums add tw-proxy-status-broken --file ./logs/run.txt
+
+# 5. Cross-link related threads.
+textforums link tw-proxy-status-broken pp-claude-cmd-profile-bug
+
+# 6. Edit a prior entry (0-indexed) or open the whole thread in $EDITOR.
+textforums edit-entry tw-proxy-status-broken 1 --content "Fixed in 0.4.3."
+textforums edit tw-proxy-status-broken
+
+# 7. Close when resolved — the closing note becomes the final entry.
+textforums close tw-proxy-status-broken --content "Shipped passthrough group in 0.4.3."
+
+# 8. Housekeeping: list all tags in use, find stale threads, or bulk-close.
+textforums tags
+textforums doctor --age-days 14
+textforums bulk-close --tag stale --dry-run
+textforums bulk-close --query "0.3.x" --yes --content "closing old 0.3.x bugs"
+
+# 9. Reopen if needed.
+textforums reopen tw-proxy-status-broken
+"""
+
+
+@forums.command("example")
+def forums_example() -> None:
+    """Print an annotated walkthrough of the typical textforums workflow."""
+    click.echo(_EXAMPLE_FLOW, nl=False)
