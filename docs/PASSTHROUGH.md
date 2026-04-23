@@ -17,7 +17,8 @@ Given `tw proxy <sub> <args...>`:
 The group is defined in `src/textworkspace/cli.py` as `_PassthroughGroup` with
 per-tool subclasses — `_ProxyPassthroughGroup` (textproxy),
 `_ServePassthroughGroup` (textserve), `_ReadPassthroughGroup` (textread),
-and `_AccountsPassthroughGroup` (textaccounts) are the current users.
+`_AccountsPassthroughGroup` (textaccounts), and `_MapPassthroughGroup`
+(textmap) are the current users.
 
 Top-level shortcuts that forward to a tool (rather than full groups) also
 exist: `tw up` → `textserve up --all`, `tw down` → `textserve down --all`.

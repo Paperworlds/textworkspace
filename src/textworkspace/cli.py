@@ -1691,6 +1691,34 @@ def accounts_cmd(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw map — passthrough to textmap
+# ---------------------------------------------------------------------------
+
+
+class _MapPassthroughGroup(_PassthroughGroup):
+    tool_name = "textmap"
+
+
+@main.group("map", cls=_MapPassthroughGroup, invoke_without_command=True)
+@click.pass_context
+def map_cmd(ctx: click.Context) -> None:
+    """Query and manage the knowledge graph via textmap.
+
+    Subcommands (init, doctor, daily, add, sync, inbox, validate, ingest,
+    expand, query, ...) are forwarded to `textmap`. Run `tw map <sub>
+    --help` for the tool's own docs. With no subcommand, runs
+    `textmap --help`.
+    """
+    if ctx.invoked_subcommand is None:
+        binary = shutil.which("textmap")
+        if binary is None:
+            click.echo("map: textmap not installed — run: pip install textmap", err=True)
+            raise SystemExit(1)
+        result = subprocess.run([binary, "--help"], check=False)
+        raise SystemExit(result.returncode)
+
+
+# ---------------------------------------------------------------------------
 # tw read — passthrough to textread
 # ---------------------------------------------------------------------------
 
