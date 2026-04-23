@@ -1293,3 +1293,98 @@ def test_forums_edit_entry_multiple_entries(tmp_path):
     assert thread.entries[0].content == "entry 0"
     assert thread.entries[1].content == "modified entry 1"
     assert thread.entries[2].content == "entry 2"
+
+
+# ---------------------------------------------------------------------------
+# ThreadContext
+# ---------------------------------------------------------------------------
+
+from textworkspace.forums import ThreadContext
+
+
+def test_thread_context_roundtrip(tmp_path):
+    """A thread with a populated context survives save/load."""
+    ctx = ThreadContext(
+        repos=["textworkspace", "textaccounts"],
+        paths=["src/api.py"],
+        commit="abc1234",
+        spec="textaccounts-api",
+    )
+    meta = ThreadMeta(
+        title="Test",
+        created="2026-04-24T00:00:00Z",
+        author="tester",
+        tags=["spec"],
+        context=ctx,
+    )
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "test" / "thread.yaml")
+    save_thread(thread)
+
+    loaded = load_thread(tmp_path, "test")
+    assert loaded.meta.context.repos == ["textworkspace", "textaccounts"]
+    assert loaded.meta.context.paths == ["src/api.py"]
+    assert loaded.meta.context.commit == "abc1234"
+    assert loaded.meta.context.spec == "textaccounts-api"
+
+
+def test_thread_context_empty_is_not_serialised(tmp_path):
+    """Empty context doesn't pollute thread.yaml."""
+    meta = ThreadMeta(title="Plain", created="2026-04-24T00:00:00Z", author="tester")
+    thread = Thread(meta=meta, entries=[], path=tmp_path / "plain" / "thread.yaml")
+    save_thread(thread)
+    raw = (tmp_path / "plain" / "thread.yaml").read_text()
+    assert "context:" not in raw
+
+
+def test_thread_context_tolerates_singular_repo_on_read(tmp_path):
+    """Legacy singular 'repo:' form parses into repos list."""
+    thread_dir = tmp_path / "legacy"
+    thread_dir.mkdir()
+    (thread_dir / "thread.yaml").write_text(
+        "meta:\n"
+        "  title: L\n"
+        "  created: '2026-04-24T00:00:00Z'\n"
+        "  author: t\n"
+        "  tags: []\n"
+        "  status: open\n"
+        "  context:\n"
+        "    repo: textaccounts\n"
+        "    path: src/api.py\n"
+        "entries: []\n"
+    )
+    loaded = load_thread(tmp_path, "legacy")
+    assert loaded.meta.context.repos == ["textaccounts"]
+    assert loaded.meta.context.paths == ["src/api.py"]
+
+
+def test_forums_new_with_context_flags(tmp_path):
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, [
+        "new", "--title", "Ctx", "--content", "body",
+        "--repo", "a", "--repo", "b",
+        "--path", "src/x.py",
+        "--commit", "deadbeef",
+        "--spec", "some-spec",
+    ])
+    assert result.exit_code == 0, result.output
+    loaded = load_thread(tmp_path, "ctx")
+    assert loaded.meta.context.repos == ["a", "b"]
+    assert loaded.meta.context.paths == ["src/x.py"]
+    assert loaded.meta.context.commit == "deadbeef"
+    assert loaded.meta.context.spec == "some-spec"
+
+
+def test_forums_list_filters_by_context(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "A", "--content", "x", "--repo", "alpha", "--spec", "s1"])
+    runner.invoke(forums, ["new", "--title", "B", "--content", "x", "--repo", "beta"])
+    runner.invoke(forums, ["new", "--title", "C", "--content", "x"])  # no context
+
+    r1 = runner.invoke(forums, ["list", "--repo", "alpha"])
+    assert "a" in r1.output.lower() and "b" not in r1.output.lower().split("title")[-1].lower() or "B" not in r1.output
+    # Harder assertions:
+    r2 = runner.invoke(forums, ["list", "--spec", "s1"])
+    assert "A" in r2.output
+    assert "B" not in r2.output
+    r3 = runner.invoke(forums, ["list", "--repo", "nonexistent"])
+    assert "No threads found" in r3.output

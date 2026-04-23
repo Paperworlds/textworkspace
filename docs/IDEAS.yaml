@@ -2,6 +2,38 @@
 # Ordered by priority within each category
 
 brainstorm:
+  - name: extract-textforums-repo
+    title: Extract textforums into its own repo (textforums)
+    priority: 1
+    status: brainstorm
+    date: "2026-04-24"
+    description: >
+      textforums has grown past 'small helper'. It now has its own data model
+      (ThreadMeta, Entry, Thread, ThreadLink, ThreadContext), lifecycle
+      commands (new/add/edit/close/reopen/bulk-close), querying
+      (list/search/tags), maintenance (doctor/migrate-context), and a
+      dedicated spec subsystem (forums spec new/show/check/adopt/supersede/
+      brief/explain/refs). Living inside textworkspace is starting to feel
+      accidental — the spec + forum loop is the cross-repo communication
+      layer, not a workspace utility.
+    why:
+      - "Separation of concerns: textworkspace is a meta-CLI and package manager; textforums is a cross-repo coordination protocol."
+      - "Clearer dependency graph — other repos can depend on textforums without pulling in all of textworkspace."
+      - "Versioning the protocol independently: the spec format can bump without churning textworkspace releases."
+      - "Makes it easier to wrap textforums as an MCP server later (agent-native integration)."
+    risks:
+      - "Migration churn: tw forums passthrough stays, but internal callers (doctor, specs.py) need to import from the new package."
+      - "Duplicate YAML/dataclass machinery if we don't factor a shared textforums.api."
+      - "Versioning lag between repos — needs a spec (eat our own dogfood)."
+    proposed_split:
+      - "textforums/  — library + CLI, owns ThreadMeta/Entry/Context, list/new/add/edit/close/search/tags/doctor/migrate-context."
+      - "textworkspace/ — keeps the tw forums passthrough group; depends on textforums."
+      - "Spec subsystem (forums spec *) moves to textforums — it's fundamentally a forum feature that happens to reference source code."
+    open_questions:
+      - "Does spec check (which walks dev_root) belong in textforums or stay in textworkspace?"
+      - "Do we publish textforums to PyPI, or keep it github-install like the rest of the stack?"
+      - "Should the first spec authored in textforums be the textforums protocol itself (api, ThreadMeta shape)?"
+
   - name: forums-agent-integration
     title: Enforce forums usage in agent sessions
     priority: 1

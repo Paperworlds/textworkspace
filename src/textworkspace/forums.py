@@ -71,6 +71,24 @@ class ThreadLink:
 
 
 @dataclass
+class ThreadContext:
+    """Typed pointers from a thread to concrete entities.
+
+    Repos is a list — a cross-repo discussion has multiple participants,
+    like a chat with more people. Other fields are singular; use extra for
+    anything not modelled.
+    """
+    repos: list[str] = field(default_factory=list)
+    paths: list[str] = field(default_factory=list)
+    commit: str = ""
+    spec: str = ""
+    extra: dict = field(default_factory=dict)
+
+    def is_empty(self) -> bool:
+        return not (self.repos or self.paths or self.commit or self.spec or self.extra)
+
+
+@dataclass
 class ThreadMeta:
     title: str
     created: str           # ISO 8601
@@ -78,6 +96,7 @@ class ThreadMeta:
     tags: list[str] = field(default_factory=list)
     status: str = "open"
     links: list[ThreadLink] = field(default_factory=list)
+    context: ThreadContext = field(default_factory=ThreadContext)
 
 
 @dataclass
@@ -112,6 +131,41 @@ def slug_from_title(title: str) -> str:
 # Serialisation helpers
 # ---------------------------------------------------------------------------
 
+def _context_to_dict(ctx: ThreadContext) -> dict:
+    d: dict = {}
+    if ctx.repos:
+        d["repos"] = list(ctx.repos)
+    if ctx.paths:
+        d["paths"] = list(ctx.paths)
+    if ctx.commit:
+        d["commit"] = ctx.commit
+    if ctx.spec:
+        d["spec"] = ctx.spec
+    if ctx.extra:
+        d["extra"] = dict(ctx.extra)
+    return d
+
+
+def _parse_context(data: dict | None) -> ThreadContext:
+    if not isinstance(data, dict):
+        return ThreadContext()
+    repos_raw = data.get("repos")
+    # Tolerate singular form on read: repo: X or repo: [X, Y].
+    if repos_raw is None and "repo" in data:
+        repo_val = data["repo"]
+        repos_raw = repo_val if isinstance(repo_val, list) else [repo_val]
+    repos = [str(r) for r in (repos_raw or [])]
+    paths_raw = data.get("paths") or ([data["path"]] if data.get("path") else [])
+    paths = [str(p) for p in paths_raw]
+    return ThreadContext(
+        repos=repos,
+        paths=paths,
+        commit=str(data.get("commit") or ""),
+        spec=str(data.get("spec") or ""),
+        extra=dict(data.get("extra") or {}),
+    )
+
+
 def _meta_to_dict(meta: ThreadMeta) -> dict:
     d: dict = {
         "title": meta.title,
@@ -122,6 +176,8 @@ def _meta_to_dict(meta: ThreadMeta) -> dict:
     }
     if meta.links:
         d["links"] = [{"rel": lnk.rel, "slug": lnk.slug, "note": lnk.note} for lnk in meta.links]
+    if not meta.context.is_empty():
+        d["context"] = _context_to_dict(meta.context)
     return d
 
 
@@ -148,6 +204,7 @@ def _parse_meta(data: dict) -> ThreadMeta:
         tags=data.get("tags") or [],
         status=data.get("status", "open"),
         links=links,
+        context=_parse_context(data.get("context")),
     )
 
 
@@ -370,10 +427,21 @@ def cli() -> None:
 @forums.command("list")
 @click.option("--status", "-s", default=None, help="Filter by status (open/resolved).")
 @click.option("--tag", "-t", default=None, help="Filter by tag.")
-def forums_list(status: str | None, tag: str | None) -> None:
+@click.option("--repo", default=None, help="Filter by context.repos membership.")
+@click.option("--spec", default=None, help="Filter by context.spec.")
+@click.option("--path", default=None, help="Filter by substring match on context.paths.")
+def forums_list(status: str | None, tag: str | None, repo: str | None, spec: str | None, path: str | None) -> None:
     """List threads as a table."""
     root = get_root()
     threads = list_threads(root, status=status, tag=tag)
+
+    if repo:
+        threads = [t for t in threads if repo in t.meta.context.repos]
+    if spec:
+        threads = [t for t in threads if t.meta.context.spec == spec]
+    if path:
+        threads = [t for t in threads if any(path in p for p in t.meta.context.paths)]
+
     if not threads:
         click.echo("No threads found.")
         return
@@ -406,7 +474,20 @@ def forums_list(status: str | None, tag: str | None) -> None:
 @click.option("--tag", "-t", "tags", multiple=True, help="Tag (repeatable).")
 @click.option("--author", "-a", default=None, help="Author name.")
 @click.option("--content", "-c", default=None, help="First entry content. Opens $EDITOR if omitted.")
-def forums_new(title: str, tags: tuple[str, ...], author: str | None, content: str | None) -> None:
+@click.option("--repo", "repos", multiple=True, help="Context: repo(s) this thread is about (repeatable).")
+@click.option("--path", "paths", multiple=True, help="Context: file path(s) the thread references (repeatable).")
+@click.option("--commit", default=None, help="Context: git commit SHA this thread is about.")
+@click.option("--spec", default=None, help="Context: spec slug this thread discusses.")
+def forums_new(
+    title: str,
+    tags: tuple[str, ...],
+    author: str | None,
+    content: str | None,
+    repos: tuple[str, ...],
+    paths: tuple[str, ...],
+    commit: str | None,
+    spec: str | None,
+) -> None:
     """Create a new thread, optionally with a first entry."""
     root = get_root()
     slug = slug_from_title(title)
@@ -416,7 +497,13 @@ def forums_new(title: str, tags: tuple[str, ...], author: str | None, content: s
 
     author = get_author(author)
     now = _now_iso()
-    meta = ThreadMeta(title=title, created=now, author=author, tags=list(tags))
+    ctx = ThreadContext(
+        repos=list(repos),
+        paths=list(paths),
+        commit=commit or "",
+        spec=spec or "",
+    )
+    meta = ThreadMeta(title=title, created=now, author=author, tags=list(tags), context=ctx)
     thread = Thread(meta=meta, entries=[], path=thread_dir / _THREAD_FILE)
 
     if content is None:
@@ -468,6 +555,16 @@ def forums_show(slug: str, raw: bool) -> None:
     click.echo(f"Created: {m.created}")
     if m.tags:
         click.echo(f"Tags:    {', '.join(m.tags)}")
+    if not m.context.is_empty():
+        ctx = m.context
+        if ctx.repos:
+            click.echo(f"Repos:   {', '.join(ctx.repos)}")
+        if ctx.paths:
+            click.echo(f"Paths:   {', '.join(ctx.paths)}")
+        if ctx.commit:
+            click.echo(f"Commit:  {ctx.commit}")
+        if ctx.spec:
+            click.echo(f"Spec:    {ctx.spec}")
     if m.links:
         click.echo("Links:")
         for lnk in m.links:
@@ -845,6 +942,61 @@ def forums_example() -> None:
 
 
 # ---------------------------------------------------------------------------
+# forums migrate-context — infer context.repos from tags matching dev_root repos
+# ---------------------------------------------------------------------------
+
+
+@forums.command("migrate-context")
+@click.option("--dry-run", is_flag=True, help="Show planned changes without writing.")
+def forums_migrate_context(dry_run: bool) -> None:
+    """Backfill context.repos from tags that name a repo under dev_root.
+
+    Existing tags are kept (they still carry semantic tags like 'spec' or
+    'bug'); only the repo-name ones are ALSO copied into context.repos.
+    Threads that already have context.repos are skipped.
+    """
+    dev_root = _dev_root_from_config()
+    if dev_root is None or not dev_root.exists():
+        click.echo("migrate-context: dev_root not set or missing", err=True)
+        raise SystemExit(1)
+
+    repo_names = {
+        p.name for p in dev_root.iterdir()
+        if p.is_dir() and not p.name.startswith(".")
+    }
+
+    root = get_root()
+    changed = 0
+    for thread_dir in sorted(root.iterdir()):
+        if not thread_dir.is_dir():
+            continue
+        thread_file = thread_dir / _THREAD_FILE
+        if not thread_file.exists():
+            continue
+        try:
+            thread = load_thread(root, thread_dir.name)
+        except Exception:
+            continue
+        if thread.meta.context.repos:
+            continue
+        inferred = [t for t in thread.meta.tags if t in repo_names]
+        if not inferred:
+            continue
+        click.echo(f"  {thread_dir.name}  + repos: {inferred}")
+        if not dry_run:
+            thread.meta.context.repos = inferred
+            save_thread(thread)
+        changed += 1
+
+    if changed == 0:
+        click.echo("migrate-context: nothing to do.")
+    elif dry_run:
+        click.echo(f"(dry-run — {changed} thread(s) would be updated)")
+    else:
+        click.echo(f"updated {changed} thread(s).")
+
+
+# ---------------------------------------------------------------------------
 # forums spec — cross-repo spec publication and conformance
 # ---------------------------------------------------------------------------
 
@@ -953,6 +1105,11 @@ def spec_new(slug: str, owner: str, title: str, consumers: tuple[str, ...], no_t
         created=now,
         author=author,
         tags=["spec", owner],
+        context=ThreadContext(
+            repos=[owner, *consumers],
+            spec=slug,
+            paths=[str(spec.path.relative_to(dev_root))],
+        ),
     )
     body = (
         f"Discussion thread for spec `{slug}` owned by `{owner}`.\n\n"
