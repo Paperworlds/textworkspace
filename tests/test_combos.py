@@ -382,9 +382,11 @@ class TestInitCreatesComboYaml:
         assert combos_path.exists()
         data = yaml.safe_load(combos_path.read_text())
         assert "combos" in data
-        assert "up" in data["combos"]
-        assert "down" in data["combos"]
         assert "reset" in data["combos"]
+        assert "go" in data["combos"]
+        # up/down were promoted to top-level `tw up`/`tw down` (see cli.py)
+        assert "up" not in data["combos"]
+        assert "down" not in data["combos"]
 
     def test_init_does_not_overwrite_existing_combos(self, tmp_path, monkeypatch):
         monkeypatch.setattr("textworkspace.config.CONFIG_DIR", tmp_path)

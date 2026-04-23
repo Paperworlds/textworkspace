@@ -31,23 +31,10 @@ _GH_API_BASE = "https://api.github.com"
 DEFAULT_COMBOS_YAML = """\
 # textworkspace combos — user-defined workflow recipes
 # Add your own combos here, or in ~/.config/paperworlds/combos.d/<name>.yaml
+#
+# Note: `tw up` and `tw down` are now top-level commands mapping to
+# `textserve up --all` and `textserve down --all`. They used to be combos.
 combos:
-  up:
-    description: Start proxy and default servers
-    builtin: true
-    steps:
-      - run: proxy start
-        skip_if: proxy.running
-      - run: servers start --tag default
-
-  down:
-    description: Stop all servers and proxy
-    builtin: true
-    steps:
-      - run: servers stop --all
-      - run: proxy stop
-        skip_if: proxy.stopped
-
   reset:
     description: Switch profile and restart proxy and servers
     builtin: true

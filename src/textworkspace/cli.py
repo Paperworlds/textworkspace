@@ -1642,6 +1642,55 @@ def serve(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw up / tw down — bring the whole MCP fleet up or down via textserve
+# ---------------------------------------------------------------------------
+
+
+@main.command("up")
+def up_cmd() -> None:
+    """Bring the whole MCP fleet up (`textserve up --all`)."""
+    _textserve_passthrough("up", "--all")
+
+
+@main.command("down")
+def down_cmd() -> None:
+    """Bring the whole MCP fleet down (`textserve down --all`)."""
+    _textserve_passthrough("down", "--all")
+
+
+# ---------------------------------------------------------------------------
+# tw accounts — passthrough to textaccounts
+# ---------------------------------------------------------------------------
+
+
+class _AccountsPassthroughGroup(_PassthroughGroup):
+    tool_name = "textaccounts"
+
+
+@main.group("accounts", cls=_AccountsPassthroughGroup, invoke_without_command=True)
+@click.pass_context
+def accounts_cmd(ctx: click.Context) -> None:
+    """Manage textaccounts profiles.
+
+    Subcommands (list, status, doctor, adopt, create, rename, alias,
+    show, ...) are forwarded to `textaccounts`. Run `tw accounts <sub>
+    --help` for the tool's own docs. With no subcommand, runs
+    `textaccounts status`.
+
+    Note: `tw accounts show <profile>` prints shell eval output. To
+    actually activate a profile in your shell, use `tw switch <profile>`
+    (handled separately for shell-eval propagation).
+    """
+    if ctx.invoked_subcommand is None:
+        binary = shutil.which("textaccounts")
+        if binary is None:
+            click.echo("accounts: textaccounts not installed — run: pip install textaccounts", err=True)
+            raise SystemExit(1)
+        result = subprocess.run([binary, "status"], check=False)
+        raise SystemExit(result.returncode)
+
+
+# ---------------------------------------------------------------------------
 # tw read — passthrough to textread
 # ---------------------------------------------------------------------------
 
@@ -2044,6 +2093,71 @@ def combos_remove(name: str) -> None:
         raise SystemExit(1)
     path.unlink()
     click.echo(f"removed '{name}'")
+
+
+@combos_cmd.command("sync")
+@click.option("--dry-run", is_flag=True, help="Show changes without writing.")
+def combos_sync(dry_run: bool) -> None:
+    """Refresh builtin combos in combos.yaml against the current defaults.
+
+    Drops builtin combos that were removed from DEFAULT_COMBOS_YAML, updates
+    those that changed, and preserves user-defined (non-builtin) combos.
+    """
+    import yaml as _yaml
+
+    if not COMBOS_FILE.exists():
+        click.echo(f"combos.yaml not found at {COMBOS_FILE} — run `tw init`", err=True)
+        raise SystemExit(1)
+
+    defaults = _yaml.safe_load(DEFAULT_COMBOS_YAML) or {}
+    default_combos = defaults.get("combos", {}) or {}
+
+    current = _yaml.safe_load(COMBOS_FILE.read_text()) or {}
+    user_combos = current.get("combos", {}) or {}
+
+    added: list[str] = []
+    removed: list[str] = []
+    updated: list[str] = []
+    kept: list[str] = []
+
+    new_combos: dict[str, Any] = {}
+    for name, defn in user_combos.items():
+        if defn.get("builtin"):
+            if name not in default_combos:
+                removed.append(name)
+                continue
+            if defn != default_combos[name]:
+                updated.append(name)
+                new_combos[name] = default_combos[name]
+            else:
+                kept.append(name)
+                new_combos[name] = defn
+        else:
+            kept.append(name)
+            new_combos[name] = defn
+
+    for name, defn in default_combos.items():
+        if name not in new_combos:
+            added.append(name)
+            new_combos[name] = defn
+
+    if not (added or removed or updated):
+        click.echo("combos sync: up to date.")
+        return
+
+    for n in added:
+        click.echo(f"  + {n}")
+    for n in updated:
+        click.echo(f"  ~ {n}")
+    for n in removed:
+        click.echo(f"  - {n}")
+
+    if dry_run:
+        click.echo("(dry-run — no changes written)")
+        return
+
+    COMBOS_FILE.write_text(_yaml.safe_dump({"combos": new_combos}, sort_keys=False))
+    click.echo(f"wrote {COMBOS_FILE}")
 
 
 # ---------------------------------------------------------------------------
