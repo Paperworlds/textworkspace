@@ -1369,38 +1369,11 @@ def _proxy_passthrough(*args: str) -> None:
     raise SystemExit(result.returncode)
 
 
-@proxy_cmd.command("start")
-def proxy_start() -> None:
-    """Start textproxy as a background daemon."""
-    _proxy_passthrough("start")
-
-
-@proxy_cmd.command("stop")
-def proxy_stop() -> None:
-    """Stop the running textproxy daemon."""
-    _proxy_passthrough("stop")
-
-
-@proxy_cmd.command("restart")
-def proxy_restart() -> None:
-    """Restart the textproxy daemon."""
-    _proxy_passthrough("restart")
-
-
-@proxy_cmd.command("log")
-@click.option("-f", "--follow", is_flag=True, help="Follow log output.")
-def proxy_log(follow: bool) -> None:
-    """Tail the textproxy daemon log."""
-    if follow:
-        _proxy_passthrough("log", "-f")
-    else:
-        _proxy_passthrough("log")
-
-
-@proxy_cmd.command("os")
-def proxy_os() -> None:
-    """Show macOS launchd agent integration status."""
-    _proxy_passthrough("os")
+# Explicit wrappers only for subcommands that cannot be expressed as pure
+# passthrough. `os install` and `os uninstall` are space-separated in textproxy,
+# so we expose them with dashes and translate here. All other subcommands
+# (start, stop, restart, log, status, stats, setup, sessions, ...) flow through
+# _ProxyPassthroughGroup automatically.
 
 
 @proxy_cmd.command("os-install")
@@ -1413,12 +1386,6 @@ def proxy_os_install() -> None:
 def proxy_os_uninstall() -> None:
     """Remove launchd agent."""
     _proxy_passthrough("os", "uninstall")
-
-
-@proxy_cmd.command("setup")
-def proxy_setup() -> None:
-    """Generate CA cert and install to system keychain (for HTTPS_PROXY mode)."""
-    _proxy_passthrough("setup")
 
 
 # ---------------------------------------------------------------------------
