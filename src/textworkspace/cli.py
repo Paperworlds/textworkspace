@@ -1602,76 +1602,43 @@ def repo_import(tool: str | None, import_all: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-@main.command()
-@click.argument("name", required=False)
-@click.option("--tag", default=None, help="Filter or start servers by tag.")
-@click.option("--json", "as_json", is_flag=True, help="Output raw JSON.")
-def serve(name: str | None, tag: str | None, as_json: bool) -> None:
+def _textserve_bin() -> str | None:
+    p = shutil.which("textserve")
+    if p:
+        return p
+    managed = BIN_DIR / "textserve"
+    if managed.exists():
+        return str(managed)
+    return None
+
+
+def _textserve_passthrough(*args: str) -> None:
+    binary = _textserve_bin()
+    if binary is None:
+        click.echo("serve: textserve not installed — run: tw update textserve", err=True)
+        raise SystemExit(1)
+    result = subprocess.run([binary, *args], check=False)
+    raise SystemExit(result.returncode)
+
+
+class _ServePassthroughGroup(_PassthroughGroup):
+    tool_name = "textserve"
+
+    def _tool_bin(self) -> str | None:
+        return _textserve_bin()
+
+
+@main.group("serve", cls=_ServePassthroughGroup, invoke_without_command=True)
+@click.pass_context
+def serve(ctx: click.Context) -> None:
     """Start or inspect textserve servers.
 
-    With no arguments, lists running servers.
-    Pass NAME to start or inspect a specific server.
+    With no subcommand, shows `textserve status` (the fleet table).
+    Any other subcommand (start, stop, logs, restart, doctor, ...) is
+    forwarded to `textserve` — use `tw serve <sub> --help` for tool docs.
     """
-    binary = shutil.which("textserve")
-    if binary is None and (BIN_DIR / "textserve").exists():
-        binary = str(BIN_DIR / "textserve")
-
-    if binary is None:
-        click.echo(
-            "warning: textserve binary not found — run: tw update textserve",
-            err=True,
-        )
-        raise SystemExit(1)
-
-    if name is None and tag is None:
-        # List running servers
-        cmd = [binary, "list", "--json"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            click.echo(f"serve: {result.stderr.strip() or 'textserve list failed'}", err=True)
-            raise SystemExit(result.returncode)
-
-        if as_json:
-            click.echo(result.stdout, nl=False)
-            return
-
-        try:
-            servers = json.loads(result.stdout) if result.stdout.strip() else []
-        except Exception:  # noqa: BLE001
-            click.echo(result.stdout, nl=False)
-            return
-
-        if not isinstance(servers, list):
-            servers = [servers]
-
-        if not servers:
-            click.echo("No servers running.")
-            return
-
-        for srv in servers:
-            s_name = srv.get("name", "?")
-            s_status = srv.get("status", "?")
-            s_addr = srv.get("addr", srv.get("address", ""))
-            addr_part = f"  {s_addr}" if s_addr else ""
-            click.echo(f"  {s_name}  {s_status}{addr_part}")
-        return
-
-    # Start / inspect a named server
-    cmd = [binary]
-    if name:
-        cmd += ["start", name]
-    if tag:
-        cmd += ["--tag", tag]
-    if as_json:
-        cmd += ["--json"]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.stdout:
-        click.echo(result.stdout, nl=False)
-    if result.stderr:
-        click.echo(result.stderr, nl=False, err=True)
-    if result.returncode != 0:
-        raise SystemExit(result.returncode)
+    if ctx.invoked_subcommand is None:
+        _textserve_passthrough("status")
 
 
 # ---------------------------------------------------------------------------

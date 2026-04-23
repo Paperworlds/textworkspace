@@ -30,7 +30,7 @@ def test_version():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.4.1" in result.output
+    assert "0.4.4" in result.output
 
 
 def test_help():
@@ -322,9 +322,10 @@ def test_serve_warns_when_binary_missing(monkeypatch):
     assert "textserve" in result.output
 
 
-def test_serve_list_no_servers(monkeypatch, tmp_path):
+def test_serve_default_forwards_to_textserve_status(monkeypatch, tmp_path, capfd):
+    # Fake textserve that records argv and prints what `textserve status` would
     fake_bin = tmp_path / "textserve"
-    fake_bin.write_text("#!/bin/sh\necho '[]'\n")
+    fake_bin.write_text('#!/bin/sh\necho "got: $*"\n')
     fake_bin.chmod(0o755)
 
     monkeypatch.setattr("textworkspace.cli.shutil.which", lambda _: str(fake_bin))
@@ -332,24 +333,22 @@ def test_serve_list_no_servers(monkeypatch, tmp_path):
     runner = CliRunner()
     result = runner.invoke(main, ["serve"])
     assert result.exit_code == 0
-    assert "No servers running" in result.output
+    out = capfd.readouterr().out
+    assert "got: status" in out
 
 
-def test_serve_list_with_servers(monkeypatch, tmp_path):
-    import json as _json
-
-    servers = [{"name": "airflow", "status": "running", "addr": ":8080"}]
+def test_serve_passthrough_unknown_subcommand(monkeypatch, tmp_path, capfd):
     fake_bin = tmp_path / "textserve"
-    fake_bin.write_text(f"#!/bin/sh\necho '{_json.dumps(servers)}'\n")
+    fake_bin.write_text('#!/bin/sh\necho "got: $*"\n')
     fake_bin.chmod(0o755)
 
     monkeypatch.setattr("textworkspace.cli.shutil.which", lambda _: str(fake_bin))
 
     runner = CliRunner()
-    result = runner.invoke(main, ["serve"])
+    result = runner.invoke(main, ["serve", "logs", "airflow", "--tail", "50"])
     assert result.exit_code == 0
-    assert "airflow" in result.output
-    assert "running" in result.output
+    out = capfd.readouterr().out
+    assert "got: logs airflow --tail 50" in out
 
 
 # ---------------------------------------------------------------------------
