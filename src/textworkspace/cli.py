@@ -1296,7 +1296,48 @@ def _textproxy_bin() -> str | None:
     return None
 
 
-@main.group("proxy", invoke_without_command=True)
+class _PassthroughGroup(click.Group):
+    """Click group that forwards unknown subcommands (and --help) to a binary.
+
+    Explicitly-registered subcommands still take precedence; unknown names are
+    forwarded to the wrapped tool as `<tool> <name> <args...>`. This includes
+    `--help`, so `tw proxy <unknown> --help` calls the tool's own help.
+    """
+
+    tool_name: str = ""
+
+    def _tool_bin(self) -> str | None:
+        return _textproxy_bin() if self.tool_name == "textproxy" else shutil.which(self.tool_name)
+
+    def get_command(self, ctx: click.Context, name: str) -> click.Command | None:
+        cmd = super().get_command(ctx, name)
+        if cmd is not None:
+            return cmd
+        tool = self.tool_name
+
+        @click.command(
+            name=name,
+            context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+            add_help_option=False,
+            help=f"Forwarded to `{tool} {name}`. Run with --help for tool docs.",
+        )
+        @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+        def _passthrough(args: tuple[str, ...]) -> None:
+            binary = self._tool_bin()
+            if binary is None:
+                click.echo(f"{tool}: not installed — run: tw update {tool}", err=True)
+                raise SystemExit(1)
+            result = subprocess.run([binary, name, *args], check=False)
+            raise SystemExit(result.returncode)
+
+        return _passthrough
+
+
+class _ProxyPassthroughGroup(_PassthroughGroup):
+    tool_name = "textproxy"
+
+
+@main.group("proxy", cls=_ProxyPassthroughGroup, invoke_without_command=True)
 @click.pass_context
 def proxy_cmd(ctx: click.Context) -> None:
     """Manage the textproxy daemon.
@@ -1310,6 +1351,10 @@ def proxy_cmd(ctx: click.Context) -> None:
     tw proxy os         — show launchd agent status
     tw proxy os-install — install launchd agent (auto-start on login)
     tw proxy setup      — generate CA cert + install to keychain
+
+    Any other subcommand is forwarded to `textproxy <sub>` automatically
+    (e.g. `tw proxy status`, `tw proxy stats --json`). Use
+    `tw proxy <sub> --help` to see the tool's own help.
     """
     if ctx.invoked_subcommand is None:
         _proxy_passthrough("status")
