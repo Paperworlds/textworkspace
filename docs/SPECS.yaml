@@ -1,0 +1,8 @@
+# Cross-repo specs this repo follows. See `tw forums spec explain`.
+
+follows:
+  - slug: textaccounts-api
+    pinned_version: "0.1.0"
+    implemented_in:
+      - src/textworkspace/cli.py
+      - src/textworkspace/workspace.py

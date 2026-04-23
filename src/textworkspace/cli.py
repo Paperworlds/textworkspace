@@ -56,6 +56,7 @@ from textworkspace.forums import forums as forums_group
 # Optional integration imports — degrade gracefully if not installed
 # ---------------------------------------------------------------------------
 
+# SPEC: textaccounts-api
 try:
     from textaccounts.api import env_for_profile, list_profiles
 

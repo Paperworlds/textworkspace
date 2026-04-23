@@ -14,6 +14,7 @@ import yaml
 
 STATE_FILE = Path.home() / ".config" / "paperworlds" / "state.yaml"
 
+# SPEC: textaccounts-api
 try:
     from textaccounts.api import env_for_profile as _ta_env_for_profile
 
