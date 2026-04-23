@@ -15,8 +15,9 @@ Given `tw proxy <sub> <args...>`:
    the tool's native help (e.g. Go-style `Usage of stats:`), not a Click stub.
 
 The group is defined in `src/textworkspace/cli.py` as `_PassthroughGroup` with
-per-tool subclasses — `_ProxyPassthroughGroup` (textproxy) and
-`_ServePassthroughGroup` (textserve) are the current users.
+per-tool subclasses — `_ProxyPassthroughGroup` (textproxy),
+`_ServePassthroughGroup` (textserve), and `_ReadPassthroughGroup` (textread)
+are the current users.
 
 ## Why
 

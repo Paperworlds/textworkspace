@@ -1642,6 +1642,33 @@ def serve(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw read — passthrough to textread
+# ---------------------------------------------------------------------------
+
+
+class _ReadPassthroughGroup(_PassthroughGroup):
+    tool_name = "textread"
+
+
+@main.group("read", cls=_ReadPassthroughGroup, invoke_without_command=True)
+@click.pass_context
+def read_cmd(ctx: click.Context) -> None:
+    """Read URLs and PDFs via textread.
+
+    Subcommands (read, url, pdf, cache, context, remap, ...) are forwarded
+    to `textread`. Run `tw read <sub> --help` for the tool's own docs.
+    With no subcommand, prints textread's top-level help.
+    """
+    if ctx.invoked_subcommand is None:
+        binary = shutil.which("textread")
+        if binary is None:
+            click.echo("read: textread not installed — run: pip install textread", err=True)
+            raise SystemExit(1)
+        result = subprocess.run([binary, "--help"], check=False)
+        raise SystemExit(result.returncode)
+
+
+# ---------------------------------------------------------------------------
 # tw status — unified view
 # ---------------------------------------------------------------------------
 
