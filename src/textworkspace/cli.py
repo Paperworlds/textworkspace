@@ -1645,6 +1645,112 @@ def serve(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw ideas — aggregate IDEAS.yaml/md from all sibling repos
+# ---------------------------------------------------------------------------
+
+
+@main.group("ideas", invoke_without_command=True)
+@click.pass_context
+def ideas_cmd(ctx: click.Context) -> None:
+    """List and explore per-repo IDEAS backlogs.
+
+    Scans `<dev_root>/*/docs/IDEAS.yaml` (also IDEAS.yml / IDEAS.md at the
+    repo root as fallbacks) and prints a unified backlog.
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(ideas_list)
+
+
+def _ideas_dev_root() -> Path | None:
+    cfg = load_config()
+    root = cfg.defaults.get("dev_root", "")
+    return Path(root).expanduser() if root else None
+
+
+@ideas_cmd.command("list")
+@click.option("--status", "-s", default=None, help="Filter by status (idea, planned, ...).")
+@click.option("--repo", "-r", default=None, help="Filter by repo name.")
+@click.option("--query", "-q", default=None, help="Substring match on id/title/summary.")
+@click.option("--md/--no-md", default=True, show_default=True, help="Include IDEAS.md placeholders.")
+def ideas_list(status: str | None, repo: str | None, query: str | None, md: bool) -> None:
+    """List ideas across all repos under dev_root."""
+    from textworkspace.ideas import load_all_ideas
+
+    root = _ideas_dev_root()
+    if root is None:
+        click.echo("ideas: dev_root not set — run `tw dev on <path>` first", err=True)
+        raise SystemExit(1)
+
+    ideas = load_all_ideas(root)
+
+    if not md:
+        ideas = [i for i in ideas if i.format != "md"]
+    if status:
+        ideas = [i for i in ideas if i.status == status]
+    if repo:
+        ideas = [i for i in ideas if i.repo == repo]
+    if query:
+        q = query.lower()
+        ideas = [i for i in ideas if q in i.id.lower() or q in i.title.lower() or q in i.summary.lower()]
+
+    if not ideas:
+        click.echo("No ideas found.")
+        return
+
+    repo_w = max(len(i.repo) for i in ideas)
+    id_w = min(max(len(i.id) for i in ideas), 32)
+    status_w = max(len(i.status) for i in ideas)
+    for i in ideas:
+        prio = f"p{i.priority} " if i.priority else ""
+        click.echo(f"  {i.repo:<{repo_w}}  {i.id[:id_w]:<{id_w}}  {i.status:<{status_w}}  {prio}{i.title}")
+
+
+@ideas_cmd.command("show")
+@click.argument("repo_name")
+@click.argument("idea_id", required=False)
+def ideas_show(repo_name: str, idea_id: str | None) -> None:
+    """Print an idea's full summary, or dump the repo's IDEAS file if no id."""
+    from textworkspace.ideas import load_ideas_for_repo
+
+    root = _ideas_dev_root()
+    if root is None:
+        click.echo("ideas: dev_root not set", err=True)
+        raise SystemExit(1)
+
+    repo_path = root / repo_name
+    if not repo_path.exists():
+        click.echo(f"ideas: repo '{repo_name}' not found under {root}", err=True)
+        raise SystemExit(1)
+
+    ideas = load_ideas_for_repo(repo_path)
+    if not ideas:
+        click.echo(f"No IDEAS file in {repo_name}.")
+        return
+
+    if idea_id is None:
+        # Dump the source file
+        click.echo(ideas[0].path.read_text(), nl=False)
+        return
+
+    for i in ideas:
+        if i.id == idea_id:
+            click.echo(f"repo:     {i.repo}")
+            click.echo(f"file:     {i.path}")
+            click.echo(f"id:       {i.id}")
+            click.echo(f"title:    {i.title}")
+            click.echo(f"status:   {i.status}")
+            if i.priority:
+                click.echo(f"priority: {i.priority}")
+            if i.summary:
+                click.echo("")
+                click.echo(i.summary)
+            return
+
+    click.echo(f"ideas: '{idea_id}' not found in {repo_name}", err=True)
+    raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
 # tw up / tw down — bring the whole MCP fleet up or down via textserve
 # ---------------------------------------------------------------------------
 
