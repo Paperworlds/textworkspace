@@ -880,6 +880,9 @@ def forums_spec() -> None:
     frontmatter; the companion thread (tagged 'spec') holds discussion.
     Consumer repos declare what they follow in docs/SPECS.yaml and mark
     implementations with `# SPEC: <slug>` comments.
+
+    Run `tw forums spec explain` for the full format reference, or
+    `tw forums spec brief` for an agent-ready summary of the current repo.
     """
 
 
@@ -1038,6 +1041,89 @@ def spec_check(repo: str | None, strict: bool) -> None:
         raise SystemExit(1)
 
 
+_SPEC_EXPLAIN = """\
+# Cross-repo specs — the rules, inline
+
+A **spec** is a contract one repo publishes for others to follow. It lives in
+the owner repo; discussion lives in a textforums thread tagged `spec`.
+
+## Where things live
+
+- Owner repo:     docs/specs/<slug>.md       (YAML frontmatter + body)
+- Consumer repo:  docs/SPECS.yaml            (what it follows)
+- Source code:    `# SPEC: <slug>` comments  (one per implementation)
+- Discussion:     ~/.textforums/spec-<slug>/ (companion thread, tag=spec)
+
+## Spec file format
+
+```markdown
+---
+slug: protocol-envelope-v2
+owner: textgame-io
+status: draft          # draft | proposed | adopted | deprecated | superseded
+version: 0.1.0
+consumers: [textworld, textworld-clients]
+supersedes: protocol-envelope-v1   # optional
+adopted_at: 2026-04-20             # set by `tw forums spec adopt`
+---
+# Protocol Envelope v2
+
+## Summary
+## Motivation
+## Interface
+## Conformance
+## Open questions
+```
+
+Frozen-when-adopted: slug, owner, version, supersedes, adopted_at.
+New version = new slug + `supersedes`. Drift warnings come from `tw doctor`.
+
+## Consumer manifest
+
+```yaml
+# docs/SPECS.yaml in the consumer repo
+follows:
+  - slug: protocol-envelope-v2
+    pinned_version: 2.0.0           # optional — else track current adopted
+    implemented_in:
+      - src/protocol/envelope.ts
+```
+
+Every `implemented_in` path must exist. Each followed spec must appear at
+least once as `# SPEC: <slug>` in source.
+
+## Agent workflow (repeat on every session)
+
+1. `tw forums spec brief`                 # what does THIS repo own/follow?
+2. Implement against adopted specs only.
+3. Update docs/SPECS.yaml and `# SPEC:` markers in the same commit that
+   changes an implementation.
+4. `tw forums spec check --repo <this>`   # before committing
+5. `tw doctor` surfaces check findings across the stack.
+
+## Commands
+
+  tw forums spec list       [--owner R] [--consumer R] [--status S]
+  tw forums spec new <slug> --owner <repo> --title "..." [--consumer R ...]
+  tw forums spec show <slug>
+  tw forums spec refs <slug>              # grep `# SPEC: <slug>` markers
+  tw forums spec check [--repo R] [--strict]
+  tw forums spec adopt <slug>             # draft/proposed -> adopted
+  tw forums spec supersede <old> <new>    # old -> superseded, new -> adopted
+  tw forums spec brief [--repo R]         # this-repo brief for agents
+"""
+
+
+@forums_spec.command("explain")
+def spec_explain() -> None:
+    """Print the canonical spec format and agent workflow.
+
+    Same content as docs/SPECS-FORMAT.md but available anywhere you can run
+    `tw` — intended so agents don't have to find the file.
+    """
+    click.echo(_SPEC_EXPLAIN, nl=False)
+
+
 @forums_spec.command("brief")
 @click.option("--repo", default=None, help="Repo to brief (default: infer from CWD).")
 def spec_brief(repo: str | None) -> None:
@@ -1124,6 +1210,7 @@ def spec_brief(repo: str | None) -> None:
         click.echo("  - Ensure each `implemented_in` path exists and contains `# SPEC: <slug>`.")
         click.echo("  - If pinned_version drifts from upstream, upgrade intentionally.")
     click.echo("  - Run `tw forums spec check --repo " + repo + "` before you commit.")
+    click.echo("  - Unfamiliar with the spec format? Run `tw forums spec explain`.")
 
 
 @forums_spec.command("adopt")

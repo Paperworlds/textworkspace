@@ -1,5 +1,11 @@
 # Cross-repo specs
 
+> **The CLI is the source of truth for this format.** Run:
+> ```
+> tw forums spec explain
+> ```
+> This file is kept in sync but may lag. If they disagree, trust the CLI.
+
 A **spec** is a contract one repo publishes for others to follow. Specs live
 in the owner repo; discussion lives in a textforums thread tagged `spec`.
 
