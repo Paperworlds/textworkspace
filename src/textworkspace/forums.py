@@ -842,3 +842,339 @@ textforums reopen tw-proxy-status-broken
 def forums_example() -> None:
     """Print an annotated walkthrough of the typical textforums workflow."""
     click.echo(_EXAMPLE_FLOW, nl=False)
+
+
+# ---------------------------------------------------------------------------
+# forums spec — cross-repo spec publication and conformance
+# ---------------------------------------------------------------------------
+
+
+def _dev_root_from_config() -> Path | None:
+    """Resolve dev_root from textworkspace config (without importing cli.py)."""
+    try:
+        from textworkspace.config import load_config
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return None
+    root = (cfg.defaults or {}).get("dev_root", "")
+    return Path(root).expanduser() if root else None
+
+
+def _require_dev_root() -> Path:
+    root = _dev_root_from_config()
+    if root is None or not root.exists():
+        raise click.ClickException(
+            "dev_root not set or missing — run 'tw dev on <path>' to configure it"
+        )
+    return root
+
+
+@forums.group("spec")
+def forums_spec() -> None:
+    """Publish and check cross-repo specs.
+
+    A spec lives in the owner repo at docs/specs/<slug>.md with YAML
+    frontmatter; the companion thread (tagged 'spec') holds discussion.
+    Consumer repos declare what they follow in docs/SPECS.yaml and mark
+    implementations with `# SPEC: <slug>` comments.
+    """
+
+
+@forums_spec.command("list")
+@click.option("--owner", default=None, help="Filter by owner repo.")
+@click.option("--consumer", default=None, help="Filter by consumer repo.")
+@click.option("--status", default=None, help="Filter by status (draft/proposed/adopted/...).")
+def spec_list(owner: str | None, consumer: str | None, status: str | None) -> None:
+    """List specs discovered across dev_root."""
+    from textworkspace.specs import discover_specs
+
+    specs = discover_specs(_require_dev_root())
+    if owner:
+        specs = [s for s in specs if s.owner == owner]
+    if consumer:
+        specs = [s for s in specs if consumer in s.consumers]
+    if status:
+        specs = [s for s in specs if s.status == status]
+
+    if not specs:
+        click.echo("No specs found.")
+        return
+
+    owner_w = max(len(s.owner) for s in specs)
+    slug_w = max(len(s.slug) for s in specs)
+    status_w = max(len(s.status) for s in specs)
+    for s in specs:
+        consumers = ", ".join(s.consumers) or "-"
+        click.echo(f"  {s.owner:<{owner_w}}  {s.slug:<{slug_w}}  {s.status:<{status_w}}  v{s.version}  consumers={consumers}")
+
+
+@forums_spec.command("new")
+@click.argument("slug")
+@click.option("--owner", required=True, help="Owner repo name (under dev_root).")
+@click.option("--title", required=True, help="Spec title.")
+@click.option("--consumer", "consumers", multiple=True, help="Consumer repo (repeatable).")
+@click.option("--no-thread", is_flag=True, help="Skip creating the companion forum thread.")
+def spec_new(slug: str, owner: str, title: str, consumers: tuple[str, ...], no_thread: bool) -> None:
+    """Scaffold docs/specs/<slug>.md in the owner repo (+ companion thread)."""
+    from textworkspace.specs import scaffold_spec, write_spec
+
+    dev_root = _require_dev_root()
+    owner_repo = dev_root / owner
+    if not owner_repo.exists():
+        raise click.ClickException(f"owner repo '{owner}' not found under {dev_root}")
+
+    spec = scaffold_spec(owner_repo, slug=slug, title=title, owner_name=owner)
+    if spec.path.exists():
+        raise click.ClickException(f"spec already exists at {spec.path}")
+    spec.consumers = list(consumers)
+    write_spec(spec)
+    click.echo(f"wrote {spec.path}")
+
+    if no_thread:
+        return
+
+    # Companion thread.
+    root = get_root()
+    thread_slug = f"spec-{slug}"
+    thread_dir = root / thread_slug
+    if thread_dir.exists():
+        click.echo(f"(companion thread '{thread_slug}' already exists; skipping)", err=True)
+        return
+    author = get_author(None)
+    now = _now_iso()
+    meta = ThreadMeta(
+        title=f"SPEC: {title}",
+        created=now,
+        author=author,
+        tags=["spec", owner],
+    )
+    body = (
+        f"Discussion thread for spec `{slug}` owned by `{owner}`.\n\n"
+        f"Source: {spec.path}\n"
+    )
+    thread = Thread(meta=meta, entries=[Entry(author=author, timestamp=now, status="open", content=body)], path=thread_dir / _THREAD_FILE)
+    save_thread(thread)
+    click.echo(f"created thread '{thread_slug}'")
+
+
+@forums_spec.command("show")
+@click.argument("slug")
+def spec_show(slug: str) -> None:
+    """Print a spec's markdown plus a pointer to its companion thread."""
+    from textworkspace.specs import find_spec
+
+    spec = find_spec(_require_dev_root(), slug)
+    if spec is None:
+        raise click.ClickException(f"spec '{slug}' not found")
+
+    click.echo(f"# Source: {spec.path}")
+    thread_slug = f"spec-{slug}"
+    if (get_root() / thread_slug).exists():
+        click.echo(f"# Thread: textforums show {thread_slug}")
+    click.echo("")
+    click.echo(spec.path.read_text(), nl=False)
+
+
+@forums_spec.command("refs")
+@click.argument("slug")
+@click.option("--repo", default=None, help="Restrict search to one repo under dev_root.")
+def spec_refs(slug: str, repo: str | None) -> None:
+    """Grep `# SPEC: <slug>` markers across repos."""
+    from textworkspace.specs import find_markers
+
+    dev_root = _require_dev_root()
+    repos: list[Path]
+    if repo:
+        candidate = dev_root / repo
+        if not candidate.exists():
+            raise click.ClickException(f"repo '{repo}' not found")
+        repos = [candidate]
+    else:
+        repos = [p for p in dev_root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+
+    total = 0
+    for r in sorted(repos):
+        hits = find_markers(r, slug)
+        for path, line, matched in hits:
+            rel = path.relative_to(dev_root)
+            click.echo(f"  {rel}:{line}  # SPEC: {matched}")
+            total += 1
+    if total == 0:
+        click.echo(f"No '# SPEC: {slug}' markers found.")
+
+
+@forums_spec.command("check")
+@click.option("--repo", default=None, help="Check a single consumer repo.")
+@click.option("--strict", is_flag=True, help="Exit non-zero on any warning, not just errors.")
+def spec_check(repo: str | None, strict: bool) -> None:
+    """Verify consumer manifests (docs/SPECS.yaml) against adopted specs."""
+    from textworkspace.specs import check_all, check_consumer, discover_specs
+
+    dev_root = _require_dev_root()
+    if repo:
+        repo_path = dev_root / repo
+        if not repo_path.exists():
+            raise click.ClickException(f"repo '{repo}' not found")
+        specs_by_slug = {s.slug: s for s in discover_specs(dev_root)}
+        findings = check_consumer(dev_root, repo_path, specs_by_slug)
+    else:
+        findings = check_all(dev_root)
+
+    if not findings:
+        click.echo("spec check: ok")
+        return
+
+    errors = [f for f in findings if f.level == "error"]
+    warnings = [f for f in findings if f.level == "warn"]
+
+    for f in findings:
+        tag = "ERROR" if f.level == "error" else "warn "
+        click.echo(f"  [{tag}] {f.consumer}:{f.slug}  {f.message}")
+
+    if errors or (strict and warnings):
+        raise SystemExit(1)
+
+
+@forums_spec.command("brief")
+@click.option("--repo", default=None, help="Repo to brief (default: infer from CWD).")
+def spec_brief(repo: str | None) -> None:
+    """Print an actionable brief for an agent working on a repo.
+
+    Lists the specs the repo OWNS (with status) and the specs it FOLLOWS
+    (with pass/fail per check), plus exact commands to run next.
+    """
+    from textworkspace.specs import (
+        check_consumer,
+        discover_specs,
+        find_markers,
+        load_consumer_manifest,
+    )
+
+    dev_root = _require_dev_root()
+    if repo is None:
+        # Infer: first ancestor of CWD under dev_root.
+        cwd = Path.cwd().resolve()
+        try:
+            rel = cwd.relative_to(dev_root.resolve())
+            repo = rel.parts[0] if rel.parts else None
+        except ValueError:
+            repo = None
+        if repo is None:
+            raise click.ClickException(
+                "cannot infer repo — run from inside a repo under dev_root, or pass --repo"
+            )
+
+    repo_path = dev_root / repo
+    if not repo_path.exists():
+        raise click.ClickException(f"repo '{repo}' not found under {dev_root}")
+
+    all_specs = discover_specs(dev_root)
+    owned = [s for s in all_specs if s.owner == repo]
+    follows = load_consumer_manifest(repo_path)
+    follows_entries = follows.follows if follows else []
+
+    click.echo(f"# Spec brief — {repo}")
+    click.echo("")
+
+    # Owned
+    if owned:
+        click.echo("## Owned specs")
+        for s in owned:
+            marker_hits = len(find_markers(repo_path, s.slug))
+            click.echo(f"  {s.slug}  ({s.status}, v{s.version})  — {marker_hits} marker(s) in source")
+            click.echo(f"    source:  {s.path}")
+            if s.consumers:
+                click.echo(f"    consumers: {', '.join(s.consumers)}")
+        click.echo("")
+    else:
+        click.echo("## Owned specs")
+        click.echo("  (none)")
+        click.echo("")
+
+    # Follows
+    click.echo("## Follows")
+    if not follows_entries:
+        click.echo(f"  (no docs/SPECS.yaml manifest in {repo})")
+        click.echo("")
+    else:
+        specs_by_slug = {s.slug: s for s in all_specs}
+        findings = check_consumer(dev_root, repo_path, specs_by_slug)
+        findings_by_slug: dict[str, list] = {}
+        for f in findings:
+            findings_by_slug.setdefault(f.slug, []).append(f)
+        for entry in follows_entries:
+            spec = specs_by_slug.get(entry.slug)
+            status_tag = spec.status if spec else "MISSING"
+            click.echo(f"  {entry.slug}  (upstream: {status_tag}"
+                       + (f", v{spec.version}" if spec else "")
+                       + f", pinned={entry.pinned_version or 'latest'})")
+            for f in findings_by_slug.get(entry.slug, []):
+                tag = "ERROR" if f.level == "error" else "warn"
+                click.echo(f"    [{tag}] {f.message}")
+        click.echo("")
+
+    # Suggested actions
+    click.echo("## Next steps for the agent")
+    if owned and any(s.status == "draft" for s in owned):
+        click.echo("  - Draft specs exist in this repo. Iterate, then `tw forums spec adopt <slug>`.")
+    if follows_entries:
+        click.echo("  - Ensure each `implemented_in` path exists and contains `# SPEC: <slug>`.")
+        click.echo("  - If pinned_version drifts from upstream, upgrade intentionally.")
+    click.echo("  - Run `tw forums spec check --repo " + repo + "` before you commit.")
+
+
+@forums_spec.command("adopt")
+@click.argument("slug")
+def spec_adopt(slug: str) -> None:
+    """Transition a spec draft/proposed → adopted (sets adopted_at, freezes frontmatter)."""
+    from textworkspace.specs import find_spec, write_spec
+    from datetime import date
+
+    spec = find_spec(_require_dev_root(), slug)
+    if spec is None:
+        raise click.ClickException(f"spec '{slug}' not found")
+    if spec.status == "adopted":
+        click.echo(f"spec '{slug}' is already adopted (version {spec.version}).")
+        return
+    if spec.status not in {"draft", "proposed"}:
+        raise click.ClickException(f"cannot adopt from status '{spec.status}'")
+
+    spec.status = "adopted"
+    spec.adopted_at = date.today().isoformat()
+    write_spec(spec)
+    click.echo(f"adopted: {spec.slug} v{spec.version} ({spec.path})")
+
+
+@forums_spec.command("supersede")
+@click.argument("old_slug")
+@click.argument("new_slug")
+def spec_supersede(old_slug: str, new_slug: str) -> None:
+    """Mark OLD_SLUG as superseded by NEW_SLUG and adopt NEW_SLUG.
+
+    Does NOT update consumer manifests — consumers upgrade on their schedule.
+    """
+    from textworkspace.specs import find_spec, write_spec
+    from datetime import date
+
+    dev_root = _require_dev_root()
+    old = find_spec(dev_root, old_slug)
+    new = find_spec(dev_root, new_slug)
+    if old is None:
+        raise click.ClickException(f"old spec '{old_slug}' not found")
+    if new is None:
+        raise click.ClickException(f"new spec '{new_slug}' not found")
+
+    old.status = "superseded"
+    write_spec(old)
+
+    new.supersedes = old_slug
+    if new.status != "adopted":
+        new.status = "adopted"
+        new.adopted_at = date.today().isoformat()
+    write_spec(new)
+
+    click.echo(f"{old_slug} → superseded")
+    click.echo(f"{new_slug} → adopted (supersedes {old_slug})")

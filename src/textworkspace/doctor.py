@@ -405,6 +405,25 @@ def run_doctor_checks() -> list[CheckResult]:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
+    # --- Cross-repo spec conformance ---
+    try:
+        from textworkspace.specs import check_all as _spec_check_all
+        from textworkspace.config import load_config as _load_cfg
+        _cfg = _load_cfg()
+        _dev_root = (_cfg.defaults or {}).get("dev_root", "")
+        if _dev_root:
+            from pathlib import Path as _Path
+            findings = _spec_check_all(_Path(_dev_root).expanduser())
+            for f in findings:
+                results.append(CheckResult(
+                    label=f"spec:{f.consumer}:{f.slug}",
+                    detail=f.message,
+                    status="fail" if f.level == "error" else "warn",
+                    fix="tw forums spec check" if f.level == "error" else "",
+                ))
+    except Exception:  # noqa: BLE001
+        pass
+
     return results
 
 
