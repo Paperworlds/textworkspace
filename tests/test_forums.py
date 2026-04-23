@@ -1423,3 +1423,50 @@ def test_quickstart_prints_onboarding(tmp_path):
     assert result.exit_code == 0
     assert "tw forums inbox" in result.output
     assert "context.repos" in result.output
+
+
+def test_context_to_and_mentions_roundtrip(tmp_path):
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, [
+        "new", "--title", "Deploy me", "--content", "...",
+        "--repo", "acme",
+        "--to", "deployer",
+        "--mention", "reviewer",
+        "--mention", "tester",
+    ])
+    assert result.exit_code == 0, result.output
+    loaded = load_thread(tmp_path, "deploy-me")
+    assert loaded.meta.context.to == "deployer"
+    assert loaded.meta.context.mentions == ["reviewer", "tester"]
+
+
+def test_inbox_as_role_filters_to_and_mentions(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T1", "--content", "x",
+                           "--repo", "r", "--to", "deployer"])
+    runner.invoke(forums, ["new", "--title", "T2", "--content", "x",
+                           "--repo", "r", "--to", "reviewer"])
+    runner.invoke(forums, ["new", "--title", "T3", "--content", "x",
+                           "--repo", "r", "--mention", "deployer"])
+    runner.invoke(forums, ["new", "--title", "T4", "--content", "x",
+                           "--repo", "r"])  # unaddressed
+
+    result = runner.invoke(forums, ["inbox", "--repo", "r", "--as", "deployer"])
+    assert result.exit_code == 0, result.output
+    assert "t1" in result.output  # to=deployer
+    assert "t2" not in result.output  # to=reviewer — filtered out
+    assert "t3" in result.output  # cc: deployer
+    assert "t4" in result.output  # unaddressed — visible to any role
+
+
+def test_inbox_format_prompt_dumps_bodies(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Starter", "--content", "run the migration",
+                           "--repo", "r", "--to", "next-session"])
+
+    result = runner.invoke(forums, ["inbox", "--repo", "r", "--format", "prompt"])
+    assert result.exit_code == 0
+    assert "## Starter" in result.output
+    assert "run the migration" in result.output
+    assert "to=next-session" in result.output
+    assert "textforums add starter" in result.output

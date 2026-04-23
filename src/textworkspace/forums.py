@@ -75,17 +75,27 @@ class ThreadContext:
     """Typed pointers from a thread to concrete entities.
 
     Repos is a list — a cross-repo discussion has multiple participants,
-    like a chat with more people. Other fields are singular; use extra for
-    anything not modelled.
+    like a chat with more people.
+
+    For agent-to-agent addressing:
+      to:        the primary addressee role (e.g. 'reviewer', 'deployer')
+      mentions:  other roles copied on this thread
+
+    Roles are free-form strings; repos agree on naming organically.
     """
     repos: list[str] = field(default_factory=list)
     paths: list[str] = field(default_factory=list)
     commit: str = ""
     spec: str = ""
+    to: str = ""
+    mentions: list[str] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
 
     def is_empty(self) -> bool:
-        return not (self.repos or self.paths or self.commit or self.spec or self.extra)
+        return not (
+            self.repos or self.paths or self.commit or self.spec
+            or self.to or self.mentions or self.extra
+        )
 
 
 @dataclass
@@ -141,6 +151,10 @@ def _context_to_dict(ctx: ThreadContext) -> dict:
         d["commit"] = ctx.commit
     if ctx.spec:
         d["spec"] = ctx.spec
+    if ctx.to:
+        d["to"] = ctx.to
+    if ctx.mentions:
+        d["mentions"] = list(ctx.mentions)
     if ctx.extra:
         d["extra"] = dict(ctx.extra)
     return d
@@ -157,11 +171,14 @@ def _parse_context(data: dict | None) -> ThreadContext:
     repos = [str(r) for r in (repos_raw or [])]
     paths_raw = data.get("paths") or ([data["path"]] if data.get("path") else [])
     paths = [str(p) for p in paths_raw]
+    mentions_raw = data.get("mentions") or []
     return ThreadContext(
         repos=repos,
         paths=paths,
         commit=str(data.get("commit") or ""),
         spec=str(data.get("spec") or ""),
+        to=str(data.get("to") or ""),
+        mentions=[str(m) for m in mentions_raw],
         extra=dict(data.get("extra") or {}),
     )
 
@@ -478,6 +495,8 @@ def forums_list(status: str | None, tag: str | None, repo: str | None, spec: str
 @click.option("--path", "paths", multiple=True, help="Context: file path(s) the thread references (repeatable).")
 @click.option("--commit", default=None, help="Context: git commit SHA this thread is about.")
 @click.option("--spec", default=None, help="Context: spec slug this thread discusses.")
+@click.option("--to", "to", default=None, help="Address the thread to a role (e.g. reviewer, deployer).")
+@click.option("--mention", "mentions", multiple=True, help="Copy another role (repeatable).")
 def forums_new(
     title: str,
     tags: tuple[str, ...],
@@ -487,6 +506,8 @@ def forums_new(
     paths: tuple[str, ...],
     commit: str | None,
     spec: str | None,
+    to: str | None,
+    mentions: tuple[str, ...],
 ) -> None:
     """Create a new thread, optionally with a first entry."""
     root = get_root()
@@ -502,6 +523,8 @@ def forums_new(
         paths=list(paths),
         commit=commit or "",
         spec=spec or "",
+        to=to or "",
+        mentions=list(mentions),
     )
     meta = ThreadMeta(title=title, created=now, author=author, tags=list(tags), context=ctx)
     thread = Thread(meta=meta, entries=[], path=thread_dir / _THREAD_FILE)
@@ -565,6 +588,10 @@ def forums_show(slug: str, raw: bool) -> None:
             click.echo(f"Commit:  {ctx.commit}")
         if ctx.spec:
             click.echo(f"Spec:    {ctx.spec}")
+        if ctx.to:
+            click.echo(f"To:      {ctx.to}")
+        if ctx.mentions:
+            click.echo(f"Cc:      {', '.join(ctx.mentions)}")
     if m.links:
         click.echo("Links:")
         for lnk in m.links:
@@ -956,6 +983,8 @@ an author, a mentioned party, or a subject of a thread.
 ## First thing to run in any session
 
   tw forums inbox                      # threads directed at THIS repo, unread first
+  tw forums inbox --as reviewer        # only threads to=reviewer or cc: reviewer
+  tw forums inbox --format prompt      # dump bodies paste-ready (for handoff)
 
 The inbox auto-infers the repo from your CWD. It surfaces:
   - unread threads whose context.repos includes this repo
@@ -973,9 +1002,13 @@ After you've processed the inbox, mark it read:
       --path src/some/file.py \\
       --spec <slug>            # optional — for spec discussions
       --tag bug                # optional — free-form semantic tags
+      --to <role>              # optional — address a specific agent role
+      --mention <role>         # optional — copy another role (repeatable)
 
 `--repo` is how other repos find your thread via their inbox. Multiple repos
-means it's a cross-repo discussion ('a chat with more people').
+means it's a cross-repo discussion ('a chat with more people'). `--to` and
+`--mention` address individual agent roles within a repo (e.g. reviewer,
+deployer, next-session). Roles are free-form strings.
 
 ## Replying, closing, reopening
 
@@ -1085,26 +1118,43 @@ def _thread_last_activity(thread: Thread) -> str:
 
 @forums.command("inbox")
 @click.option("--repo", default=None, help="Repo to inbox for (default: infer from CWD).")
+@click.option("--as", "as_role", default=None, help="Filter to threads addressed to this role (to=<role> or mentions includes <role>).")
 @click.option("--mark-read", is_flag=True, help="Mark all surfaced threads as read.")
 @click.option("--all", "show_all", is_flag=True, help="Show read threads too.")
-def forums_inbox(repo: str | None, mark_read: bool, show_all: bool) -> None:
+@click.option("--format", "fmt", type=click.Choice(["table", "prompt"]), default="table", help="Output format.")
+def forums_inbox(repo: str | None, as_role: str | None, mark_read: bool, show_all: bool, fmt: str) -> None:
     """Per-repo inbox: threads referencing this repo, with unread state.
 
     A thread is 'unread' if its last activity (created or any entry) is
     newer than the repo's stored last_read timestamp. Use --mark-read to
     update the timestamp once an agent has processed the inbox.
+
+    Pass --as <role> to narrow to threads addressed to (context.to) or
+    mentioning that role. Unaddressed threads stay visible — missing
+    context.to means 'any role in this repo'.
+
+    --format prompt dumps each unread thread's body as a paste-ready
+    block (for handoff to a new session).
     """
     if repo is None:
         repo = _infer_repo_from_cwd()
         if repo is None:
             raise click.ClickException(
-                "cannot infer repo — run from inside a repo under dev_root, or pass --repo"
+                "cannot infer repo — run from inside a known repo, or pass --repo"
             )
 
     root = get_root()
     last_read = read_last_read(repo)
     threads = list_threads(root)
     relevant = [t for t in threads if repo in t.meta.context.repos]
+
+    if as_role:
+        relevant = [
+            t for t in relevant
+            if (not t.meta.context.to)  # unaddressed = visible to all roles
+            or t.meta.context.to == as_role
+            or as_role in t.meta.context.mentions
+        ]
 
     unread: list[tuple[Thread, str]] = []
     read_threads: list[Thread] = []
@@ -1115,7 +1165,41 @@ def forums_inbox(repo: str | None, mark_read: bool, show_all: bool) -> None:
         else:
             read_threads.append(t)
 
+    if fmt == "prompt":
+        role_part = f" (as {as_role})" if as_role else ""
+        click.echo(f"# Inbox dump — {repo}{role_part}")
+        click.echo("")
+        if not unread:
+            click.echo("(nothing new)")
+        for t, _ in sorted(unread, key=lambda x: x[1], reverse=True):
+            slug = t.path.parent.name
+            click.echo(f"## {t.meta.title}  [{slug}]")
+            ctx = t.meta.context
+            meta_bits = []
+            if ctx.to:
+                meta_bits.append(f"to={ctx.to}")
+            if ctx.mentions:
+                meta_bits.append(f"cc={','.join(ctx.mentions)}")
+            if ctx.spec:
+                meta_bits.append(f"spec={ctx.spec}")
+            if meta_bits:
+                click.echo("  " + "  ".join(meta_bits))
+            click.echo("")
+            for e in t.entries:
+                click.echo(f"--- {e.author} @ {e.timestamp} ---")
+                click.echo(e.content)
+                click.echo("")
+            click.echo(f"(reply with: textforums add {slug} --content \"...\")")
+            click.echo("")
+        if mark_read:
+            now = _now_iso()
+            write_last_read(repo, now)
+            click.echo(f"# marked read at {now}")
+        return
+
     click.echo(f"# Inbox — {repo}")
+    if as_role:
+        click.echo(f"  role:      {as_role}")
     if last_read:
         click.echo(f"  last read: {last_read}")
     else:
@@ -1129,10 +1213,13 @@ def forums_inbox(repo: str | None, mark_read: bool, show_all: bool) -> None:
             click.echo("## Unread")
             for t, activity in sorted(unread, key=lambda x: x[1], reverse=True):
                 slug = t.path.parent.name
-                click.echo(f"  [{t.meta.status}] {slug}  ({activity})")
+                to_bit = f"  → {t.meta.context.to}" if t.meta.context.to else ""
+                click.echo(f"  [{t.meta.status}] {slug}  ({activity}){to_bit}")
                 click.echo(f"    {t.meta.title}")
                 if t.meta.context.spec:
                     click.echo(f"    spec: {t.meta.context.spec}")
+                if t.meta.context.mentions:
+                    click.echo(f"    cc:   {', '.join(t.meta.context.mentions)}")
                 click.echo(f"    reply: textforums add {slug} --content \"...\"")
                 click.echo(f"    view:  textforums show {slug}")
                 click.echo("")
