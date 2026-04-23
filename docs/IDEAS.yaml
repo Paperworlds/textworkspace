@@ -233,13 +233,10 @@ workspace_profiles:
       and aware of multiple axes. The `go` combo can delegate to `tw start`
       once workspaces land.
     key_design_points:
-      - Workspaces are the JOIN of tools, not a merger — profile and server-sets
-        stay independent so you can reuse them in different combinations.
-      - CLAUDE_CONFIG_DIR must be set in env before shelling out to mcpf so
-        server registration hits the right profile's claude.json.
-      - State written to ~/.config/paperworlds/state.yaml: active_workspace + started_at.
-      - Graceful degradation: each tool (textaccounts, textserve, textsessions)
-        is optional — missing tools warn and skip, they don't abort.
+      - "Workspaces are the JOIN of tools, not a merger — profile and server-sets stay independent so you can reuse them in different combinations."
+      - "CLAUDE_CONFIG_DIR must be set in env before shelling out to mcpf so server registration hits the right profile's claude.json."
+      - "State written to ~/.config/paperworlds/state.yaml: active_workspace + started_at."
+      - "Graceful degradation: each tool (textaccounts, textserve, textsessions) is optional — missing tools warn and skip, they don't abort."
     cli:
       - "tw start <workspace>  — switch + start servers + new session"
       - "tw stop <workspace>   — stop servers (don't switch profile back)"
@@ -641,9 +638,8 @@ developer_workflow:
           specs or lead-profile. Output: a structured review YAML saved alongside
           the project logs.
         triggers:
-          - Manual: "tw review --task <id> --project <path>"
-          - Automatic (via textwatch rule): when all prompts in a pipeline reach
-            DONE state, fire tw review for that pipeline.
+          - 'Manual: "tw review --task <id> --project <path>"'
+          - "Automatic (via textwatch rule): when all prompts in a pipeline reach DONE state, fire tw review for that pipeline."
         output_schema: |
           scope: project | task
           period: {from: ..., to: ...}
@@ -1039,7 +1035,7 @@ textmap_population:
         as `motivated_by` or `part_of` edges.
 
     - source: skills/claude-code/memory/feedback_*.md
-      type: typed Markdown (frontmatter: type, name, description)
+      type: "typed Markdown (frontmatter: type, name, description)"
       produces: Constraint nodes (extends decision type — learned behavioral rules)
       priority: 3
       why: >
@@ -1050,7 +1046,7 @@ textmap_population:
 
     - source: skills/workspace/IDENTITY.md + SOUL.md + TOOLS.md
       type: structured Markdown
-      produces: Owner node (type: team, singleton — "Paolo")
+      produces: 'Owner node (type: team, singleton — "Paolo")'
       priority: 3
       why: >
         Defines roles, decision authority, stack. Single Owner node with
@@ -1059,7 +1055,7 @@ textmap_population:
 
     - source: skills/claude-code/agents/*.md
       type: structured Markdown
-      produces: Agent nodes (type: system, subtype: agent)
+      produces: "Agent nodes (type: system, subtype: agent)"
       priority: 3
       why: >
         pr-reviewer, go-vuln-fix, snowflake-cost, wrap-it-up, etc.
@@ -1068,7 +1064,7 @@ textmap_population:
 
     - source: mono git history (paradigm/mono log)
       type: unstructured (git log)
-      produces: Decision nodes (type: decision — ADR-light from commit messages)
+      produces: "Decision nodes (type: decision — ADR-light from commit messages)"
       priority: 4
       why: >
         Historical decisions embedded in commit messages and PR descriptions.
