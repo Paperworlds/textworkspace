@@ -942,6 +942,216 @@ def forums_example() -> None:
 
 
 # ---------------------------------------------------------------------------
+# forums quickstart — agent onboarding in 30 seconds
+# ---------------------------------------------------------------------------
+
+
+_QUICKSTART = """\
+# textforums — quickstart
+
+A shared forum where repos (and the humans / agents who work on them) talk
+to each other. Threads live under ~/.textforums/<slug>/. Every repo can be
+an author, a mentioned party, or a subject of a thread.
+
+## First thing to run in any session
+
+  tw forums inbox                      # threads directed at THIS repo, unread first
+
+The inbox auto-infers the repo from your CWD. It surfaces:
+  - unread threads whose context.repos includes this repo
+  - a spec summary (owned / following) with a pointer to `tw forums spec brief`
+  - the exact reply / view commands for each thread
+
+After you've processed the inbox, mark it read:
+
+  tw forums inbox --mark-read
+
+## Writing a thread
+
+  textforums new --title "short title" \\
+      --repo <primary-repo> [--repo <other>] \\
+      --path src/some/file.py \\
+      --spec <slug>            # optional — for spec discussions
+      --tag bug                # optional — free-form semantic tags
+
+`--repo` is how other repos find your thread via their inbox. Multiple repos
+means it's a cross-repo discussion ('a chat with more people').
+
+## Replying, closing, reopening
+
+  textforums add <slug> --content "..."
+  textforums close <slug> --content "resolved by <commit>"
+  textforums reopen <slug>
+
+## Searching and listing
+
+  textforums list --repo <name>        # this repo's conversations
+  textforums list --spec <slug>        # discussions about a spec
+  textforums list --status open
+  textforums list --query "some text"
+  textforums tags                      # all tags in use
+
+## Specs live inside forums
+
+Cross-repo contracts (API surfaces, protocols, config formats) ship as specs:
+
+  tw forums spec explain               # the full format reference, inline
+  tw forums spec brief                 # what THIS repo owns and follows
+  tw forums spec check --repo <this>   # verify conformance before commit
+
+See `tw forums example` for a guided lifecycle walkthrough.
+
+## Rule of thumb for agents
+
+1. Start a session → `tw forums inbox`.
+2. Act on unread threads that block your task.
+3. When you finish a thread, `textforums close <slug> --content "..."`.
+4. When you find a new cross-repo issue, open a thread with `--repo`.
+5. Before you commit a change that touches an adopted spec, run
+   `tw forums spec check --repo <this>`.
+"""
+
+
+@forums.command("quickstart")
+def forums_quickstart() -> None:
+    """Print a 30-second onboarding for textforums (for agents and humans).
+
+    Unlike 'example' (a concrete lifecycle) or 'spec explain' (the format
+    reference), 'quickstart' is the orientation: what to run first, how
+    threads reach you, where specs fit.
+    """
+    click.echo(_QUICKSTART, nl=False)
+
+
+# ---------------------------------------------------------------------------
+# forums inbox — per-repo mailbox
+# ---------------------------------------------------------------------------
+
+
+def _state_dir() -> Path:
+    d = get_root() / ".state"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _last_read_path(repo: str) -> Path:
+    return _state_dir() / f"{repo}.last_read"
+
+
+def read_last_read(repo: str) -> str | None:
+    p = _last_read_path(repo)
+    if not p.exists():
+        return None
+    return p.read_text().strip() or None
+
+
+def write_last_read(repo: str, timestamp: str) -> None:
+    _last_read_path(repo).write_text(timestamp + "\n")
+
+
+def _infer_repo_from_cwd() -> str | None:
+    dev_root = _dev_root_from_config()
+    if dev_root is None:
+        return None
+    try:
+        rel = Path.cwd().resolve().relative_to(dev_root.resolve())
+    except ValueError:
+        return None
+    return rel.parts[0] if rel.parts else None
+
+
+def _thread_last_activity(thread: Thread) -> str:
+    """Return ISO timestamp of newest activity (last entry or creation)."""
+    ts = thread.meta.created
+    for entry in thread.entries:
+        if entry.timestamp > ts:
+            ts = entry.timestamp
+    return ts
+
+
+@forums.command("inbox")
+@click.option("--repo", default=None, help="Repo to inbox for (default: infer from CWD).")
+@click.option("--mark-read", is_flag=True, help="Mark all surfaced threads as read.")
+@click.option("--all", "show_all", is_flag=True, help="Show read threads too.")
+def forums_inbox(repo: str | None, mark_read: bool, show_all: bool) -> None:
+    """Per-repo inbox: threads referencing this repo, with unread state.
+
+    A thread is 'unread' if its last activity (created or any entry) is
+    newer than the repo's stored last_read timestamp. Use --mark-read to
+    update the timestamp once an agent has processed the inbox.
+    """
+    if repo is None:
+        repo = _infer_repo_from_cwd()
+        if repo is None:
+            raise click.ClickException(
+                "cannot infer repo — run from inside a repo under dev_root, or pass --repo"
+            )
+
+    root = get_root()
+    last_read = read_last_read(repo)
+    threads = list_threads(root)
+    relevant = [t for t in threads if repo in t.meta.context.repos]
+
+    unread: list[tuple[Thread, str]] = []
+    read_threads: list[Thread] = []
+    for t in relevant:
+        activity = _thread_last_activity(t)
+        if last_read is None or activity > last_read:
+            unread.append((t, activity))
+        else:
+            read_threads.append(t)
+
+    click.echo(f"# Inbox — {repo}")
+    if last_read:
+        click.echo(f"  last read: {last_read}")
+    else:
+        click.echo("  last read: (never)")
+    click.echo("")
+
+    if not unread and not show_all:
+        click.echo("  (nothing new)")
+    else:
+        if unread:
+            click.echo("## Unread")
+            for t, activity in sorted(unread, key=lambda x: x[1], reverse=True):
+                slug = t.path.parent.name
+                click.echo(f"  [{t.meta.status}] {slug}  ({activity})")
+                click.echo(f"    {t.meta.title}")
+                if t.meta.context.spec:
+                    click.echo(f"    spec: {t.meta.context.spec}")
+                click.echo(f"    reply: textforums add {slug} --content \"...\"")
+                click.echo(f"    view:  textforums show {slug}")
+                click.echo("")
+        if show_all and read_threads:
+            click.echo("## Read")
+            for t in read_threads:
+                slug = t.path.parent.name
+                click.echo(f"  [{t.meta.status}] {slug}  — {t.meta.title}")
+            click.echo("")
+
+    # Spec brief summary (owner/follower counts) so inbox is one-stop onboarding.
+    try:
+        from textworkspace.specs import discover_specs, load_consumer_manifest
+        dev_root = _dev_root_from_config()
+        if dev_root and dev_root.exists():
+            specs = discover_specs(dev_root)
+            owned = sum(1 for s in specs if s.owner == repo)
+            follows = load_consumer_manifest(dev_root / repo) if (dev_root / repo).exists() else None
+            following = len(follows.follows) if follows else 0
+            click.echo("## Specs")
+            click.echo(f"  owned: {owned}    following: {following}")
+            click.echo(f"  details: tw forums spec brief --repo {repo}")
+            click.echo("")
+    except Exception:  # noqa: BLE001
+        pass
+
+    if mark_read:
+        now = _now_iso()
+        write_last_read(repo, now)
+        click.echo(f"marked read at {now}")
+
+
+# ---------------------------------------------------------------------------
 # forums migrate-context — infer context.repos from tags matching dev_root repos
 # ---------------------------------------------------------------------------
 

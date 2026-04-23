@@ -1751,6 +1751,55 @@ def ideas_show(repo_name: str, idea_id: str | None) -> None:
     raise SystemExit(1)
 
 
+_IDEAS_QUICKSTART = """\
+# tw ideas — quickstart
+
+Each repo can keep an `IDEAS.yaml` (docs/IDEAS.yaml preferred) with items
+like brainstorms, plans, experiments. `tw ideas` aggregates them across
+all repos under your dev_root.
+
+## See what's on everyone's minds
+
+  tw ideas                             # everything, every repo
+  tw ideas list --repo textaccounts    # just this repo
+  tw ideas list --status idea          # filter by status
+  tw ideas list --query "passthrough"  # substring match on title/id/summary
+  tw ideas list --no-md                # hide IDEAS.md placeholders
+
+## Read one idea in full
+
+  tw ideas show <repo>                 # dump the repo's entire IDEAS file
+  tw ideas show <repo> <id>            # pretty-print one idea's summary
+
+## Canonical YAML shape
+
+  ideas:
+    - id: my-slug
+      title: Short title
+      status: idea              # idea | exploring | planned | parked | done
+      priority: 1               # optional
+      summary: |
+        Free-form prose.
+
+Also accepted: mapping form (slug as key), any top-level list-of-dicts
+(e.g. 'brainstorm:' — the first one wins).
+
+## When an idea graduates
+
+Ideas that become cross-repo contracts should promote to specs:
+
+  tw forums spec new <slug> --owner <repo> --title "..."
+
+Then delete or park the idea entry.
+"""
+
+
+@ideas_cmd.command("quickstart")
+def ideas_quickstart() -> None:
+    """Print a 30-second onboarding for tw ideas."""
+    click.echo(_IDEAS_QUICKSTART, nl=False)
+
+
 # ---------------------------------------------------------------------------
 # tw up / tw down — bring the whole MCP fleet up or down via textserve
 # ---------------------------------------------------------------------------

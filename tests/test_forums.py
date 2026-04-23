@@ -1388,3 +1388,38 @@ def test_forums_list_filters_by_context(tmp_path):
     assert "B" not in r2.output
     r3 = runner.invoke(forums, ["list", "--repo", "nonexistent"])
     assert "No threads found" in r3.output
+
+
+# ---------------------------------------------------------------------------
+# inbox
+# ---------------------------------------------------------------------------
+
+def test_inbox_shows_unread_threads_for_repo(tmp_path):
+    runner = _runner(tmp_path)
+    # Two threads; first references 'alpha', second references 'beta'.
+    r1 = runner.invoke(forums, ["new", "--title", "For alpha", "--content", "hi", "--repo", "alpha"])
+    assert r1.exit_code == 0, r1.output
+    r2 = runner.invoke(forums, ["new", "--title", "For beta", "--content", "hi", "--repo", "beta"])
+    assert r2.exit_code == 0, r2.output
+
+    result = runner.invoke(forums, ["inbox", "--repo", "alpha"])
+    assert result.exit_code == 0, result.output
+    assert "for-alpha" in result.output
+    assert "for-beta" not in result.output
+    assert "reply: textforums add for-alpha" in result.output
+
+
+def test_inbox_mark_read_then_no_unread(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T1", "--content", "x", "--repo", "r"])
+    runner.invoke(forums, ["inbox", "--repo", "r", "--mark-read"])
+    result = runner.invoke(forums, ["inbox", "--repo", "r"])
+    assert "(nothing new)" in result.output
+
+
+def test_quickstart_prints_onboarding(tmp_path):
+    runner = _runner(tmp_path)
+    result = runner.invoke(forums, ["quickstart"])
+    assert result.exit_code == 0
+    assert "tw forums inbox" in result.output
+    assert "context.repos" in result.output
