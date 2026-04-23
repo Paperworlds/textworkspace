@@ -1404,6 +1404,79 @@ def repo_cmd(ctx: click.Context) -> None:
         click.echo(ctx.get_help())
 
 
+@repo_cmd.command("add")
+@click.argument("name")
+@click.argument("path")
+@click.option("--profile", default="", help="Associate this repo with a textaccounts profile.")
+@click.option("--label", default="", help="Human-readable label.")
+def repo_add(name: str, path: str, profile: str, label: str) -> None:
+    """Register a repo outside dev_root (e.g. a work repo).
+
+    Registered repos participate in forums (inbox, list --repo), ideas
+    discovery, and spec discovery — same as repos under dev_root.
+    """
+    from textworkspace.repos import register
+
+    repo_path = Path(path).expanduser()
+    if not repo_path.exists():
+        raise click.ClickException(f"path does not exist: {repo_path}")
+    if not repo_path.is_dir():
+        raise click.ClickException(f"not a directory: {repo_path}")
+
+    cfg = load_config()
+    existing = cfg.repos.get(name)
+    register(cfg, name, repo_path, profile=profile, label=label)
+    save_config(cfg)
+
+    verb = "updated" if existing else "added"
+    profile_str = f" (profile: {profile})" if profile else ""
+    click.echo(f"{verb} repo '{name}' → {repo_path}{profile_str}")
+
+
+@repo_cmd.command("list")
+def repo_list() -> None:
+    """List all repos — dev_root scan + registered entries."""
+    from textworkspace.repos import iter_all_repos, _registered_repos, _scan_dev_root, _dev_root_path
+
+    cfg = load_config()
+    dev_root = _dev_root_path(cfg)
+    scanned = _scan_dev_root(dev_root)
+    registered = _registered_repos(cfg)
+    merged = iter_all_repos(cfg)
+
+    if not merged:
+        click.echo("No repos found. Set dev_root (tw dev on <path>) or register one (tw repo add <name> <path>).")
+        return
+
+    name_w = max(len(n) for n in merged)
+    for name in sorted(merged):
+        path = merged[name]
+        if name in registered:
+            origin = "registered"
+            profile = (cfg.repos[name].profile or "")
+            extra = f" (profile: {profile})" if profile else ""
+        elif name in scanned:
+            origin = "dev_root"
+            extra = ""
+        else:
+            origin = "?"
+            extra = ""
+        click.echo(f"  {name:<{name_w}}  {origin:<10}  {path}{extra}")
+
+
+@repo_cmd.command("remove")
+@click.argument("name")
+def repo_remove(name: str) -> None:
+    """Unregister a repo from config.repos (does NOT touch the filesystem)."""
+    from textworkspace.repos import unregister
+
+    cfg = load_config()
+    if not unregister(cfg, name):
+        raise click.ClickException(f"repo '{name}' is not registered")
+    save_config(cfg)
+    click.echo(f"unregistered '{name}' (files untouched)")
+
+
 @repo_cmd.command("move")
 @click.argument("name")
 @click.argument("new_path")
@@ -1668,6 +1741,14 @@ def _ideas_dev_root() -> Path | None:
     return Path(root).expanduser() if root else None
 
 
+def _ideas_repos() -> dict[str, Path] | None:
+    """Union of dev_root + registered repos. None if neither is usable."""
+    from textworkspace.repos import iter_all_repos
+
+    repos = iter_all_repos(load_config())
+    return repos or None
+
+
 @ideas_cmd.command("list")
 @click.option("--status", "-s", default=None, help="Filter by status (idea, planned, ...).")
 @click.option("--repo", "-r", default=None, help="Filter by repo name.")
@@ -1677,12 +1758,12 @@ def ideas_list(status: str | None, repo: str | None, query: str | None, md: bool
     """List ideas across all repos under dev_root."""
     from textworkspace.ideas import load_all_ideas
 
-    root = _ideas_dev_root()
-    if root is None:
-        click.echo("ideas: dev_root not set — run `tw dev on <path>` first", err=True)
+    repos = _ideas_repos()
+    if repos is None:
+        click.echo("ideas: no repos found — set dev_root or register with `tw repo add`", err=True)
         raise SystemExit(1)
 
-    ideas = load_all_ideas(root)
+    ideas = load_all_ideas(repos)
 
     if not md:
         ideas = [i for i in ideas if i.format != "md"]
@@ -1713,14 +1794,14 @@ def ideas_show(repo_name: str, idea_id: str | None) -> None:
     """Print an idea's full summary, or dump the repo's IDEAS file if no id."""
     from textworkspace.ideas import load_ideas_for_repo
 
-    root = _ideas_dev_root()
-    if root is None:
-        click.echo("ideas: dev_root not set", err=True)
+    repos = _ideas_repos()
+    if repos is None:
+        click.echo("ideas: no repos found", err=True)
         raise SystemExit(1)
 
-    repo_path = root / repo_name
-    if not repo_path.exists():
-        click.echo(f"ideas: repo '{repo_name}' not found under {root}", err=True)
+    repo_path = repos.get(repo_name)
+    if repo_path is None:
+        click.echo(f"ideas: repo '{repo_name}' not found (try `tw repo list`)", err=True)
         raise SystemExit(1)
 
     ideas = load_ideas_for_repo(repo_path)

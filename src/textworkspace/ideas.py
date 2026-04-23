@@ -61,12 +61,18 @@ class Idea:
         return self.path.suffix.lstrip(".")
 
 
-def discover_repos(dev_root: Path) -> list[Path]:
-    """Return sibling repo directories under dev_root that look like repos."""
-    if not dev_root.exists():
+def discover_repos(source: Path | dict[str, Path]) -> list[Path]:
+    """Return repo directories that look like repos.
+
+    Accepts either a dev_root Path (scanned by marker file) or a repo
+    dict[name→path] (used directly).
+    """
+    if isinstance(source, dict):
+        return [p for p in source.values() if p.exists()]
+    if not source.exists():
         return []
     out: list[Path] = []
-    for child in sorted(dev_root.iterdir()):
+    for child in sorted(source.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
             continue
         # Heuristic: repos have either a pyproject.toml, package.json, go.mod, or Cargo.toml
@@ -143,8 +149,8 @@ def load_ideas_for_repo(repo: Path) -> list[Idea]:
     return [_item_to_idea(repo.name, path, hint, item) for hint, item in _extract_items(data)]
 
 
-def load_all_ideas(dev_root: Path) -> list[Idea]:
+def load_all_ideas(source: Path | dict[str, Path]) -> list[Idea]:
     out: list[Idea] = []
-    for repo in discover_repos(dev_root):
+    for repo in discover_repos(source):
         out.extend(load_ideas_for_repo(repo))
     return out

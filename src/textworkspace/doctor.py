@@ -409,11 +409,10 @@ def run_doctor_checks() -> list[CheckResult]:
     try:
         from textworkspace.specs import check_all as _spec_check_all
         from textworkspace.config import load_config as _load_cfg
-        _cfg = _load_cfg()
-        _dev_root = (_cfg.defaults or {}).get("dev_root", "")
-        if _dev_root:
-            from pathlib import Path as _Path
-            findings = _spec_check_all(_Path(_dev_root).expanduser())
+        from textworkspace.repos import iter_all_repos as _iter_all_repos
+        _repos = _iter_all_repos(_load_cfg())
+        if _repos:
+            findings = _spec_check_all(_repos)
             for f in findings:
                 results.append(CheckResult(
                     label=f"spec:{f.consumer}:{f.slug}",

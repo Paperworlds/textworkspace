@@ -1049,15 +1049,29 @@ def write_last_read(repo: str, timestamp: str) -> None:
     _last_read_path(repo).write_text(timestamp + "\n")
 
 
+def _all_repos_map() -> dict[str, Path]:
+    """Dev_root scan ∪ config.repos. Empty dict if neither is usable."""
+    try:
+        from textworkspace.config import load_config
+        from textworkspace.repos import iter_all_repos
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        return iter_all_repos(load_config())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _infer_repo_from_cwd() -> str | None:
-    dev_root = _dev_root_from_config()
-    if dev_root is None:
+    try:
+        from textworkspace.config import load_config
+        from textworkspace.repos import repo_name_from_path
+    except Exception:  # noqa: BLE001
         return None
     try:
-        rel = Path.cwd().resolve().relative_to(dev_root.resolve())
-    except ValueError:
+        return repo_name_from_path(load_config(), Path.cwd())
+    except Exception:  # noqa: BLE001
         return None
-    return rel.parts[0] if rel.parts else None
 
 
 def _thread_last_activity(thread: Thread) -> str:
@@ -1132,11 +1146,12 @@ def forums_inbox(repo: str | None, mark_read: bool, show_all: bool) -> None:
     # Spec brief summary (owner/follower counts) so inbox is one-stop onboarding.
     try:
         from textworkspace.specs import discover_specs, load_consumer_manifest
-        dev_root = _dev_root_from_config()
-        if dev_root and dev_root.exists():
-            specs = discover_specs(dev_root)
+        repo_map = _all_repos_map()
+        if repo_map:
+            specs = discover_specs(repo_map)
             owned = sum(1 for s in specs if s.owner == repo)
-            follows = load_consumer_manifest(dev_root / repo) if (dev_root / repo).exists() else None
+            repo_path = repo_map.get(repo)
+            follows = load_consumer_manifest(repo_path) if repo_path else None
             following = len(follows.follows) if follows else 0
             click.echo("## Specs")
             click.echo(f"  owned: {owned}    following: {following}")
@@ -1165,15 +1180,11 @@ def forums_migrate_context(dry_run: bool) -> None:
     'bug'); only the repo-name ones are ALSO copied into context.repos.
     Threads that already have context.repos are skipped.
     """
-    dev_root = _dev_root_from_config()
-    if dev_root is None or not dev_root.exists():
-        click.echo("migrate-context: dev_root not set or missing", err=True)
+    repos = _all_repos_map()
+    if not repos:
+        click.echo("migrate-context: no repos found (set dev_root or `tw repo add`)", err=True)
         raise SystemExit(1)
-
-    repo_names = {
-        p.name for p in dev_root.iterdir()
-        if p.is_dir() and not p.name.startswith(".")
-    }
+    repo_names = set(repos.keys())
 
     root = get_root()
     changed = 0
@@ -1225,6 +1236,15 @@ def _dev_root_from_config() -> Path | None:
     return Path(root).expanduser() if root else None
 
 
+def _require_repos() -> dict[str, Path]:
+    repos = _all_repos_map()
+    if not repos:
+        raise click.ClickException(
+            "no repos found — set dev_root (`tw dev on <path>`) or register one (`tw repo add`)"
+        )
+    return repos
+
+
 def _require_dev_root() -> Path:
     root = _dev_root_from_config()
     if root is None or not root.exists():
@@ -1256,7 +1276,7 @@ def spec_list(owner: str | None, consumer: str | None, status: str | None) -> No
     """List specs discovered across dev_root."""
     from textworkspace.specs import discover_specs
 
-    specs = discover_specs(_require_dev_root())
+    specs = discover_specs(_require_repos())
     if owner:
         specs = [s for s in specs if s.owner == owner]
     if consumer:
@@ -1286,10 +1306,10 @@ def spec_new(slug: str, owner: str, title: str, consumers: tuple[str, ...], no_t
     """Scaffold docs/specs/<slug>.md in the owner repo (+ companion thread)."""
     from textworkspace.specs import scaffold_spec, write_spec
 
-    dev_root = _require_dev_root()
-    owner_repo = dev_root / owner
-    if not owner_repo.exists():
-        raise click.ClickException(f"owner repo '{owner}' not found under {dev_root}")
+    repos = _require_repos()
+    owner_repo = repos.get(owner)
+    if owner_repo is None:
+        raise click.ClickException(f"owner repo '{owner}' not found (try `tw repo list`)")
 
     spec = scaffold_spec(owner_repo, slug=slug, title=title, owner_name=owner)
     if spec.path.exists():
@@ -1318,7 +1338,7 @@ def spec_new(slug: str, owner: str, title: str, consumers: tuple[str, ...], no_t
         context=ThreadContext(
             repos=[owner, *consumers],
             spec=slug,
-            paths=[str(spec.path.relative_to(dev_root))],
+            paths=[str(spec.path.relative_to(owner_repo))],
         ),
     )
     body = (
@@ -1336,7 +1356,7 @@ def spec_show(slug: str) -> None:
     """Print a spec's markdown plus a pointer to its companion thread."""
     from textworkspace.specs import find_spec
 
-    spec = find_spec(_require_dev_root(), slug)
+    spec = find_spec(_require_repos(), slug)
     if spec is None:
         raise click.ClickException(f"spec '{slug}' not found")
 
@@ -1355,21 +1375,24 @@ def spec_refs(slug: str, repo: str | None) -> None:
     """Grep `# SPEC: <slug>` markers across repos."""
     from textworkspace.specs import find_markers
 
-    dev_root = _require_dev_root()
-    repos: list[Path]
+    repo_map = _require_repos()
+    targets: list[Path]
     if repo:
-        candidate = dev_root / repo
-        if not candidate.exists():
-            raise click.ClickException(f"repo '{repo}' not found")
-        repos = [candidate]
+        candidate = repo_map.get(repo)
+        if candidate is None:
+            raise click.ClickException(f"repo '{repo}' not found (try `tw repo list`)")
+        targets = [candidate]
     else:
-        repos = [p for p in dev_root.iterdir() if p.is_dir() and not p.name.startswith(".")]
+        targets = list(repo_map.values())
 
     total = 0
-    for r in sorted(repos):
+    for r in sorted(targets):
         hits = find_markers(r, slug)
         for path, line, matched in hits:
-            rel = path.relative_to(dev_root)
+            try:
+                rel = path.relative_to(r.parent)
+            except ValueError:
+                rel = path
             click.echo(f"  {rel}:{line}  # SPEC: {matched}")
             total += 1
     if total == 0:
@@ -1383,15 +1406,15 @@ def spec_check(repo: str | None, strict: bool) -> None:
     """Verify consumer manifests (docs/SPECS.yaml) against adopted specs."""
     from textworkspace.specs import check_all, check_consumer, discover_specs
 
-    dev_root = _require_dev_root()
+    repo_map = _require_repos()
     if repo:
-        repo_path = dev_root / repo
-        if not repo_path.exists():
-            raise click.ClickException(f"repo '{repo}' not found")
-        specs_by_slug = {s.slug: s for s in discover_specs(dev_root)}
-        findings = check_consumer(dev_root, repo_path, specs_by_slug)
+        repo_path = repo_map.get(repo)
+        if repo_path is None:
+            raise click.ClickException(f"repo '{repo}' not found (try `tw repo list`)")
+        specs_by_slug = {s.slug: s for s in discover_specs(repo_map)}
+        findings = check_consumer(repo_map, repo_path, specs_by_slug)
     else:
-        findings = check_all(dev_root)
+        findings = check_all(repo_map)
 
     if not findings:
         click.echo("spec check: ok")
@@ -1506,25 +1529,18 @@ def spec_brief(repo: str | None) -> None:
         load_consumer_manifest,
     )
 
-    dev_root = _require_dev_root()
+    repo_map = _require_repos()
     if repo is None:
-        # Infer: first ancestor of CWD under dev_root.
-        cwd = Path.cwd().resolve()
-        try:
-            rel = cwd.relative_to(dev_root.resolve())
-            repo = rel.parts[0] if rel.parts else None
-        except ValueError:
-            repo = None
+        repo = _infer_repo_from_cwd()
         if repo is None:
             raise click.ClickException(
-                "cannot infer repo — run from inside a repo under dev_root, or pass --repo"
+                "cannot infer repo — run from inside a known repo, or pass --repo"
             )
+    repo_path = repo_map.get(repo)
+    if repo_path is None:
+        raise click.ClickException(f"repo '{repo}' not found (try `tw repo list`)")
 
-    repo_path = dev_root / repo
-    if not repo_path.exists():
-        raise click.ClickException(f"repo '{repo}' not found under {dev_root}")
-
-    all_specs = discover_specs(dev_root)
+    all_specs = discover_specs(repo_map)
     owned = [s for s in all_specs if s.owner == repo]
     follows = load_consumer_manifest(repo_path)
     follows_entries = follows.follows if follows else []
@@ -1554,7 +1570,7 @@ def spec_brief(repo: str | None) -> None:
         click.echo("")
     else:
         specs_by_slug = {s.slug: s for s in all_specs}
-        findings = check_consumer(dev_root, repo_path, specs_by_slug)
+        findings = check_consumer(repo_map, repo_path, specs_by_slug)
         findings_by_slug: dict[str, list] = {}
         for f in findings:
             findings_by_slug.setdefault(f.slug, []).append(f)
@@ -1587,7 +1603,7 @@ def spec_adopt(slug: str) -> None:
     from textworkspace.specs import find_spec, write_spec
     from datetime import date
 
-    spec = find_spec(_require_dev_root(), slug)
+    spec = find_spec(_require_repos(), slug)
     if spec is None:
         raise click.ClickException(f"spec '{slug}' not found")
     if spec.status == "adopted":
@@ -1613,9 +1629,9 @@ def spec_supersede(old_slug: str, new_slug: str) -> None:
     from textworkspace.specs import find_spec, write_spec
     from datetime import date
 
-    dev_root = _require_dev_root()
-    old = find_spec(dev_root, old_slug)
-    new = find_spec(dev_root, new_slug)
+    repo_map = _require_repos()
+    old = find_spec(repo_map, old_slug)
+    new = find_spec(repo_map, new_slug)
     if old is None:
         raise click.ClickException(f"old spec '{old_slug}' not found")
     if new is None:

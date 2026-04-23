@@ -140,12 +140,26 @@ def write_spec(spec: Spec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def discover_specs(dev_root: Path) -> list[Spec]:
-    """Walk dev_root/<repo>/docs/specs/*.md and parse each."""
+def _as_repo_map(source: Path | dict[str, Path]) -> dict[str, Path]:
+    """Normalise a dev_root Path or an explicit name→path dict."""
+    if isinstance(source, dict):
+        return source
+    if not source.exists():
+        return {}
+    return {
+        p.name: p
+        for p in sorted(source.iterdir())
+        if p.is_dir() and not p.name.startswith(".")
+    }
+
+
+def discover_specs(source: Path | dict[str, Path]) -> list[Spec]:
+    """Walk every repo's docs/specs/*.md and parse each.
+
+    Accepts either a dev_root Path (scanned) or a repo dict (used directly).
+    """
     out: list[Spec] = []
-    if not dev_root.exists():
-        return out
-    for repo in sorted(p for p in dev_root.iterdir() if p.is_dir() and not p.name.startswith(".")):
+    for _name, repo in sorted(_as_repo_map(source).items()):
         specs_dir = repo / "docs" / "specs"
         if not specs_dir.is_dir():
             continue
@@ -159,8 +173,8 @@ def discover_specs(dev_root: Path) -> list[Spec]:
     return out
 
 
-def find_spec(dev_root: Path, slug: str) -> Spec | None:
-    for spec in discover_specs(dev_root):
+def find_spec(source: Path | dict[str, Path], slug: str) -> Spec | None:
+    for spec in discover_specs(source):
         if spec.slug == slug:
             return spec
     return None
@@ -188,11 +202,9 @@ def load_consumer_manifest(repo: Path) -> ConsumerManifest | None:
     return ConsumerManifest(repo=repo.name, path=path, follows=entries)
 
 
-def discover_consumer_manifests(dev_root: Path) -> list[ConsumerManifest]:
+def discover_consumer_manifests(source: Path | dict[str, Path]) -> list[ConsumerManifest]:
     out: list[ConsumerManifest] = []
-    if not dev_root.exists():
-        return out
-    for repo in sorted(p for p in dev_root.iterdir() if p.is_dir() and not p.name.startswith(".")):
+    for _name, repo in sorted(_as_repo_map(source).items()):
         mf = load_consumer_manifest(repo)
         if mf is not None:
             out.append(mf)
@@ -323,13 +335,12 @@ def check_consumer(
     return findings
 
 
-def check_all(dev_root: Path) -> list[CheckFinding]:
-    specs_by_slug = {s.slug: s for s in discover_specs(dev_root)}
+def check_all(source: Path | dict[str, Path]) -> list[CheckFinding]:
+    repos = _as_repo_map(source)
+    specs_by_slug = {s.slug: s for s in discover_specs(repos)}
     out: list[CheckFinding] = []
-    if not dev_root.exists():
-        return out
-    for repo in sorted(p for p in dev_root.iterdir() if p.is_dir() and not p.name.startswith(".")):
-        out.extend(check_consumer(dev_root, repo, specs_by_slug))
+    for _name, repo in sorted(repos.items()):
+        out.extend(check_consumer(source, repo, specs_by_slug))
     return out
 
 
