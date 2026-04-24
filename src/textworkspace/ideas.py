@@ -137,7 +137,14 @@ def _item_to_idea(repo_name: str, path: Path, id_hint: str | None, item: dict) -
     )
 
 
-def _load_single_file(repo_name: str, path: Path) -> list[Idea]:
+def _load_single_file(repo_name: str, path: Path, *, single_idea: bool = False) -> list[Idea]:
+    """Load ideas from one file.
+
+    If *single_idea* is True, the entire file is treated as one idea — nested
+    lists-of-dicts (e.g. `textmap_references:`) are kept as raw fields instead
+    of being mis-detected as idea entries. This is the mode used for per-file
+    YAML in `.files/ideas/<name>.yaml`.
+    """
     if path.suffix == ".md":
         return [Idea(
             repo=repo_name,
@@ -155,10 +162,16 @@ def _load_single_file(repo_name: str, path: Path) -> list[Idea]:
             title=f"failed to parse {path.name}: {exc}", status="error",
         )]
 
+    if single_idea:
+        # Per-file YAML pattern. Don't descend into top-level lists; they're
+        # fields of this idea (mappings, references, open_questions, etc.).
+        if isinstance(data, dict):
+            return [_item_to_idea(repo_name, path, path.stem, data)]
+        return []
+
     items = list(_extract_items(data))
     if items:
         return [_item_to_idea(repo_name, path, hint, item) for hint, item in items]
-    # Per-file YAML pattern: the whole file is one idea (common in .files/ideas/).
     if isinstance(data, dict) and (data.get("title") or data.get("id") or data.get("slug")):
         return [_item_to_idea(repo_name, path, path.stem, data)]
     return []
@@ -172,7 +185,10 @@ def load_ideas_for_repo(repo: Path) -> list[Idea]:
     if agg is not None:
         out.extend(_load_single_file(repo.name, agg))
 
-    # 2. Directory of per-idea files (.files/ideas/*.yaml etc.).
+    # 2. Directory of per-idea files (.files/ideas/*.yaml etc.). These are
+    # always single-idea files — treat the whole file as the idea, even if
+    # it contains a nested list-of-dicts (e.g. textmap_references). This
+    # prevents a nested field from masquerading as a list of ideas.
     for rel in _CANDIDATE_DIRS:
         d = repo / rel
         if not d.is_dir():
@@ -182,7 +198,7 @@ def load_ideas_for_repo(repo: Path) -> list[Idea]:
                 continue
             if child.suffix not in {".yaml", ".yml", ".md"}:
                 continue
-            out.extend(_load_single_file(repo.name, child))
+            out.extend(_load_single_file(repo.name, child, single_idea=True))
 
     return out
 
