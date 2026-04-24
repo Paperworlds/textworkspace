@@ -1396,6 +1396,43 @@ def proxy_os_uninstall() -> None:
 # tw repo move <name> <new-path>
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Shell completion helpers — wired onto key commands via shell_complete.
+# Enable once per shell:
+#   _TW_COMPLETE=fish_source tw > ~/.config/fish/completions/tw.fish
+# ---------------------------------------------------------------------------
+
+def _complete_repo_name(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        from textworkspace.repos import iter_all_repos
+        repos = iter_all_repos(load_config())
+    except Exception:  # noqa: BLE001
+        return []
+    return [r for r in sorted(repos) if r.startswith(incomplete)]
+
+
+def _complete_profile(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        from textworkspace.repos import profiles
+        vals = {v for v in profiles(load_config()).values() if v}
+    except Exception:  # noqa: BLE001
+        return []
+    return sorted(v for v in vals if v.startswith(incomplete))
+
+
+def _complete_idea_id(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        from textworkspace.ideas import load_ideas_for_repo
+        from textworkspace.repos import iter_all_repos
+        repos = iter_all_repos(load_config())
+        repo = (ctx.params or {}).get("repo_name")
+        if not repo or repo not in repos:
+            return []
+        return [i.id for i in load_ideas_for_repo(repos[repo]) if i.id.startswith(incomplete)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 @main.group("repo", invoke_without_command=True)
 @click.pass_context
 def repo_cmd(ctx: click.Context) -> None:
@@ -1434,7 +1471,7 @@ def repo_add(name: str, path: str, profile: str, label: str) -> None:
 
 
 @repo_cmd.command("list")
-@click.option("--profile", default=None, help="Filter to repos with this profile (e.g. work, personal).")
+@click.option("--profile", default=None, help="Filter to repos with this profile (e.g. work, personal).", shell_complete=_complete_profile)
 def repo_list(profile: str | None) -> None:
     """List all repos — dev_root scan + registered entries."""
     from textworkspace.repos import (
@@ -1478,7 +1515,7 @@ def repo_list(profile: str | None) -> None:
 
 
 @repo_cmd.command("remove")
-@click.argument("name")
+@click.argument("name", shell_complete=_complete_repo_name)
 def repo_remove(name: str) -> None:
     """Unregister a repo from config.repos (does NOT touch the filesystem)."""
     from textworkspace.repos import unregister
@@ -1491,7 +1528,7 @@ def repo_remove(name: str) -> None:
 
 
 @repo_cmd.command("move")
-@click.argument("name")
+@click.argument("name", shell_complete=_complete_repo_name)
 @click.argument("new_path")
 def repo_move(name: str, new_path: str) -> None:
     """Update all references when a repo folder moves.
@@ -1754,18 +1791,10 @@ def _ideas_dev_root() -> Path | None:
     return Path(root).expanduser() if root else None
 
 
-def _ideas_repos() -> dict[str, Path] | None:
-    """Union of dev_root + registered repos. None if neither is usable."""
-    from textworkspace.repos import iter_all_repos
-
-    repos = iter_all_repos(load_config())
-    return repos or None
-
-
 @ideas_cmd.command("list")
 @click.option("--status", "-s", default=None, help="Filter by status (idea, planned, ...).")
-@click.option("--repo", "-r", default=None, help="Filter by repo name.")
-@click.option("--profile", default=None, help="Filter repos by profile (e.g. work, personal).")
+@click.option("--repo", "-r", default=None, help="Filter by repo name.", shell_complete=_complete_repo_name)
+@click.option("--profile", default=None, help="Filter repos by profile (e.g. work, personal).", shell_complete=_complete_profile)
 @click.option("--query", "-q", default=None, help="Substring match on id/title/summary.")
 @click.option("--md/--no-md", default=True, show_default=True, help="Include IDEAS.md placeholders.")
 def ideas_list(status: str | None, repo: str | None, profile: str | None, query: str | None, md: bool) -> None:
@@ -1820,8 +1849,8 @@ def ideas_list(status: str | None, repo: str | None, profile: str | None, query:
 
 
 @ideas_cmd.command("show")
-@click.argument("repo_name")
-@click.argument("idea_id", required=False)
+@click.argument("repo_name", shell_complete=_complete_repo_name)
+@click.argument("idea_id", required=False, shell_complete=_complete_idea_id)
 def ideas_show(repo_name: str, idea_id: str | None) -> None:
     """Print an idea's full summary, or dump the repo's IDEAS file if no id."""
     from textworkspace.ideas import load_ideas_for_repo

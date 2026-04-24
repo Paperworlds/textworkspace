@@ -490,13 +490,57 @@ def cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Shell completion helpers — enable with:
+#   _TEXTFORUMS_COMPLETE=fish_source textforums > ~/.config/fish/completions/textforums.fish
+# ---------------------------------------------------------------------------
+
+def _complete_slug(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        root = get_root()
+        if not root.exists():
+            return []
+        return [
+            d.name for d in sorted(root.iterdir())
+            if d.is_dir() and not d.name.startswith(".")
+            and (d / _THREAD_FILE).exists()
+            and d.name.startswith(incomplete)
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _complete_forum_repo(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        return [r for r in sorted(_all_repos_map()) if r.startswith(incomplete)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _complete_forum_profile(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        from textworkspace.config import load_config
+        from textworkspace.repos import profiles
+        vals = {v for v in profiles(load_config()).values() if v}
+    except Exception:  # noqa: BLE001
+        return []
+    return sorted(v for v in vals if v.startswith(incomplete))
+
+
+def _complete_tag(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        return [t for t in list_tags(get_root()) if t.startswith(incomplete)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+# ---------------------------------------------------------------------------
 # forums list
 # ---------------------------------------------------------------------------
 
 @forums.command("list")
 @click.option("--status", "-s", default=None, help="Filter by status (open/resolved).")
-@click.option("--tag", "-t", default=None, help="Filter by tag.")
-@click.option("--repo", default=None, help="Filter by context.repos membership.")
+@click.option("--tag", "-t", default=None, help="Filter by tag.", shell_complete=_complete_tag)
+@click.option("--repo", default=None, help="Filter by context.repos membership.", shell_complete=_complete_forum_repo)
 @click.option("--spec", default=None, help="Filter by context.spec.")
 @click.option("--path", default=None, help="Filter by substring match on context.paths.")
 def forums_list(status: str | None, tag: str | None, repo: str | None, spec: str | None, path: str | None) -> None:
@@ -540,10 +584,10 @@ def forums_list(status: str | None, tag: str | None, repo: str | None, spec: str
 
 @forums.command("new")
 @click.option("--title", "-T", required=True, help="Thread title.")
-@click.option("--tag", "-t", "tags", multiple=True, help="Tag (repeatable).")
+@click.option("--tag", "-t", "tags", multiple=True, help="Tag (repeatable).", shell_complete=_complete_tag)
 @click.option("--author", "-a", default=None, help="Author name.")
 @click.option("--content", "-c", default=None, help="First entry content. Opens $EDITOR if omitted.")
-@click.option("--repo", "repos", multiple=True, help="Context: repo(s) this thread is about (repeatable).")
+@click.option("--repo", "repos", multiple=True, help="Context: repo(s) this thread is about (repeatable).", shell_complete=_complete_forum_repo)
 @click.option("--path", "paths", multiple=True, help="Context: file path(s) the thread references (repeatable).")
 @click.option("--commit", default=None, help="Context: git commit SHA this thread is about.")
 @click.option("--spec", default=None, help="Context: spec slug this thread discusses.")
@@ -615,7 +659,7 @@ def forums_new(
 # ---------------------------------------------------------------------------
 
 @forums.command("show")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--raw", is_flag=True, default=False, help="Dump raw YAML.")
 def forums_show(slug: str, raw: bool) -> None:
     """Display a thread's metadata and entries."""
@@ -681,7 +725,7 @@ def forums_show(slug: str, raw: bool) -> None:
 # ---------------------------------------------------------------------------
 
 @forums.command("add")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--content", "-c", default=None, help="Entry content. Opens $EDITOR if omitted.")
 @click.option("--author", "-a", default=None, help="Author name.")
 @click.option("--status", "-s", default="", help="Entry status tag.")
@@ -719,7 +763,7 @@ def forums_add(slug: str, content: str | None, author: str | None, status: str, 
 # ---------------------------------------------------------------------------
 
 @forums.command("close")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--content", "-c", default=None, help="Optional closing entry content.")
 @click.option("--author", "-a", default=None, help="Author name.")
 def forums_close(slug: str, content: str | None, author: str | None) -> None:
@@ -748,7 +792,7 @@ def forums_close(slug: str, content: str | None, author: str | None) -> None:
 
 @forums.command("bulk-close")
 @click.option("--status", "-s", default=None, help="Filter by status (open/resolved).")
-@click.option("--tag", "-t", default=None, help="Filter by tag.")
+@click.option("--tag", "-t", default=None, help="Filter by tag.", shell_complete=_complete_tag)
 @click.option("--content", "-c", default=None, help="Optional closing entry content for each thread.")
 @click.option("--force", "-f", is_flag=True, default=False, help="Skip confirmation prompt.")
 @click.option("--author", "-a", default=None, help="Author name for closing entry.")
@@ -792,7 +836,7 @@ def forums_bulk_close(status: str | None, tag: str | None, content: str | None, 
 # ---------------------------------------------------------------------------
 
 @forums.command("pin")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--until", "until", default=None, help="Auto-expire date (YYYY-MM-DD). Empty = no expiry.")
 @click.option("--priority", type=click.Choice(["high", "normal", "low"]), default="high",
               show_default=True, help="Priority to set (default: high).")
@@ -813,7 +857,7 @@ def forums_pin(slug: str, until: str | None, priority: str) -> None:
 
 
 @forums.command("unpin")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 def forums_unpin(slug: str) -> None:
     """Clear pin fields on a thread (priority → normal, pinned_until cleared)."""
     root = get_root()
@@ -832,7 +876,7 @@ def forums_unpin(slug: str) -> None:
 # ---------------------------------------------------------------------------
 
 @forums.command("decide")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--summary", required=True, help="Canonical one-line decision summary.")
 @click.option("--author", "-a", default=None, help="Author of the decision.")
 @click.option("--force", is_flag=True, default=False, help="Allow overwriting an existing decision.")
@@ -881,7 +925,7 @@ def forums_decide(slug: str, summary: str, author: str | None, force: bool) -> N
 # ---------------------------------------------------------------------------
 
 @forums.command("edit")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 def forums_edit(slug: str) -> None:
     """Open the thread YAML in $EDITOR."""
     root = get_root()
@@ -897,7 +941,7 @@ def forums_edit(slug: str) -> None:
 # ---------------------------------------------------------------------------
 
 @forums.command("edit-entry")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.argument("index", type=int)
 @click.option("--content", "-c", default=None, help="New entry content. Opens $EDITOR if omitted.")
 @click.option("--status", "-s", default=None, help="New entry status.")
@@ -921,7 +965,7 @@ def forums_edit_entry(slug: str, index: int, content: str | None, status: str | 
 # ---------------------------------------------------------------------------
 
 @forums.command("reopen")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--force", is_flag=True, default=False, help="Required to reopen a decided thread.")
 def forums_reopen(slug: str, force: bool) -> None:
     """Set a thread's status back to 'open'.
@@ -1003,8 +1047,8 @@ VALID_RELS = ("blocks", "blocked-by", "relates-to")
 
 
 @forums.command("link")
-@click.argument("slug")
-@click.argument("target")
+@click.argument("slug", shell_complete=_complete_slug)
+@click.argument("target", shell_complete=_complete_slug)
 @click.option("--rel", "-r", default="relates-to",
               help=f"Relationship type. Common: {', '.join(VALID_RELS)}.")
 @click.option("--note", "-n", default="", help="Optional note about the relationship.")
@@ -1035,8 +1079,8 @@ def forums_link(slug: str, target: str, rel: str, note: str) -> None:
 # ---------------------------------------------------------------------------
 
 @forums.command("unlink")
-@click.argument("slug")
-@click.argument("target")
+@click.argument("slug", shell_complete=_complete_slug)
+@click.argument("target", shell_complete=_complete_slug)
 @click.option("--rel", "-r", default=None,
               help="Relationship type to remove. Omit to remove all links to TARGET.")
 def forums_unlink(slug: str, target: str, rel: str | None) -> None:
@@ -1329,8 +1373,8 @@ def _thread_last_activity(thread: Thread) -> str:
 
 
 @forums.command("inbox")
-@click.option("--repo", default=None, help="Repo to inbox for (default: infer from CWD).")
-@click.option("--profile", default=None, help="Aggregate inbox across all repos with this profile (e.g. work).")
+@click.option("--repo", default=None, help="Repo to inbox for (default: infer from CWD).", shell_complete=_complete_forum_repo)
+@click.option("--profile", default=None, help="Aggregate inbox across all repos with this profile (e.g. work).", shell_complete=_complete_forum_profile)
 @click.option("--as", "as_role", default=None, help="Filter to threads addressed to this role (to=<role> or mentions includes <role>).")
 @click.option("--mark-read", is_flag=True, help="Mark all surfaced threads as read.")
 @click.option("--all", "show_all", is_flag=True, help="Show read threads too.")
@@ -1685,7 +1729,7 @@ def spec_list(owner: str | None, consumer: str | None, status: str | None) -> No
 
 
 @forums_spec.command("new")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 @click.option("--owner", required=True, help="Owner repo name (under dev_root).")
 @click.option("--title", required=True, help="Spec title.")
 @click.option("--consumer", "consumers", multiple=True, help="Consumer repo (repeatable).")
@@ -1739,7 +1783,7 @@ def spec_new(slug: str, owner: str, title: str, consumers: tuple[str, ...], no_t
 
 
 @forums_spec.command("show")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 def spec_show(slug: str) -> None:
     """Print a spec's markdown plus a pointer to its companion thread."""
     from textworkspace.specs import find_spec
@@ -1757,8 +1801,8 @@ def spec_show(slug: str) -> None:
 
 
 @forums_spec.command("refs")
-@click.argument("slug")
-@click.option("--repo", default=None, help="Restrict search to one repo under dev_root.")
+@click.argument("slug", shell_complete=_complete_slug)
+@click.option("--repo", default=None, help="Restrict search to one repo under dev_root.", shell_complete=_complete_forum_repo)
 def spec_refs(slug: str, repo: str | None) -> None:
     """Grep `# SPEC: <slug>` markers across repos."""
     from textworkspace.specs import find_markers
@@ -1788,7 +1832,7 @@ def spec_refs(slug: str, repo: str | None) -> None:
 
 
 @forums_spec.command("check")
-@click.option("--repo", default=None, help="Check a single consumer repo.")
+@click.option("--repo", default=None, help="Check a single consumer repo.", shell_complete=_complete_forum_repo)
 @click.option("--strict", is_flag=True, help="Exit non-zero on any warning, not just errors.")
 def spec_check(repo: str | None, strict: bool) -> None:
     """Verify consumer manifests (docs/SPECS.yaml) against adopted specs."""
@@ -1903,7 +1947,7 @@ def spec_explain() -> None:
 
 
 @forums_spec.command("brief")
-@click.option("--repo", default=None, help="Repo to brief (default: infer from CWD).")
+@click.option("--repo", default=None, help="Repo to brief (default: infer from CWD).", shell_complete=_complete_forum_repo)
 def spec_brief(repo: str | None) -> None:
     """Print an actionable brief for an agent working on a repo.
 
@@ -1985,7 +2029,7 @@ def spec_brief(repo: str | None) -> None:
 
 
 @forums_spec.command("adopt")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 def spec_adopt(slug: str) -> None:
     """Transition a spec draft/proposed → adopted (sets adopted_at, freezes frontmatter)."""
     from textworkspace.specs import find_spec, write_spec
@@ -2007,8 +2051,8 @@ def spec_adopt(slug: str) -> None:
 
 
 @forums_spec.command("supersede")
-@click.argument("old_slug")
-@click.argument("new_slug")
+@click.argument("old_slug", shell_complete=_complete_slug)
+@click.argument("new_slug", shell_complete=_complete_slug)
 def spec_supersede(old_slug: str, new_slug: str) -> None:
     """Mark OLD_SLUG as superseded by NEW_SLUG and adopt NEW_SLUG.
 
@@ -2057,7 +2101,7 @@ def _is_superseded(thread: Thread) -> bool:
 
 
 @forums_decisions.command("list")
-@click.option("--repo", default=None, help="Filter by context.repos membership.")
+@click.option("--repo", default=None, help="Filter by context.repos membership.", shell_complete=_complete_forum_repo)
 @click.option("--query", default=None, help="Substring match against title or decision summary.")
 @click.option("--owner", default=None, help="Filter by decided_by.")
 @click.option("--since", default=None, help="Only decisions decided on/after this ISO date.")
@@ -2110,7 +2154,7 @@ def decisions_list(
 
 
 @forums_decisions.command("show")
-@click.argument("slug")
+@click.argument("slug", shell_complete=_complete_slug)
 def decisions_show(slug: str) -> None:
     """Render a decision's block and body compactly."""
     root = get_root()
@@ -2149,8 +2193,8 @@ def decisions_show(slug: str) -> None:
 
 
 @forums_decisions.command("supersede")
-@click.argument("old_slug")
-@click.argument("new_slug")
+@click.argument("old_slug", shell_complete=_complete_slug)
+@click.argument("new_slug", shell_complete=_complete_slug)
 def decisions_supersede(old_slug: str, new_slug: str) -> None:
     """Add a `superseded-by` link from OLD_SLUG to NEW_SLUG.
 
