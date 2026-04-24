@@ -1381,6 +1381,8 @@ def _thread_last_activity(thread: Thread) -> str:
 @click.option("--format", "fmt", type=click.Choice(["table", "prompt"]), default="table", help="Output format.")
 @click.option("--include-decided", is_flag=True, default=False,
               help="Include status=decided threads (default: excluded — decisions are the law, not the queue).")
+@click.option("--include-resolved", is_flag=True, default=False,
+              help="Include status=resolved threads (default: excluded — finished work, not pending).")
 def forums_inbox(
     repo: str | None,
     profile: str | None,
@@ -1389,6 +1391,7 @@ def forums_inbox(
     show_all: bool,
     fmt: str,
     include_decided: bool,
+    include_resolved: bool,
 ) -> None:
     """Per-repo (or per-profile) inbox: threads referencing this repo, with unread state.
 
@@ -1449,6 +1452,9 @@ def forums_inbox(
     # Decisions are durable records, not inbox items — use `tw forums decisions` to browse.
     if not include_decided:
         relevant = [t for t in relevant if t.meta.status != "decided"]
+    # Resolved threads are finished work — out of the queue by default.
+    if not include_resolved:
+        relevant = [t for t in relevant if t.meta.status != "resolved"]
 
     if as_role:
         relevant = [
