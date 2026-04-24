@@ -563,12 +563,13 @@ def aliases() -> None:
 # Python tools that can be installed from local repos.
 # Order matters: dependencies must come first.
 # deps maps tool -> list of other _PYTHON_TOOLS it needs injected via --with-editable.
-_PYTHON_TOOLS = ("textaccounts", "textsessions", "textread", "textmap", "textworkspace")
+_PYTHON_TOOLS = ("textaccounts", "textsessions", "textread", "textmap", "textprompts", "textworkspace")
 _PYTHON_TOOL_DEPS: dict[str, list[str]] = {
     "textaccounts": [],
     "textsessions": ["textaccounts"],
     "textread": [],
     "textmap": [],
+    "textprompts": [],
     "textworkspace": [],
 }
 
@@ -2247,6 +2248,29 @@ def read_cmd(ctx: click.Context) -> None:
         binary = shutil.which("textread")
         if binary is None:
             click.echo("read: textread not installed — run: pip install textread", err=True)
+            raise SystemExit(1)
+        result = subprocess.run([binary, "--help"], check=False)
+        raise SystemExit(result.returncode)
+
+
+class _PromptsPassthroughGroup(_PassthroughGroup):
+    # Use the short alias `pp` as the forward target — it's the canonical
+    # entry for this tool and likelier to be on PATH than `textprompts`.
+    tool_name = "pp"
+
+
+@main.group("prompts", cls=_PromptsPassthroughGroup, invoke_without_command=True)
+@click.pass_context
+def prompts_cmd(ctx: click.Context) -> None:
+    """Run pp (textprompts) — persona runs, tasks, daemon, pipeline, ….
+
+    Subcommands are forwarded to `pp`. Run `tw prompts <sub> --help` for
+    the tool's own docs. With no subcommand, prints pp's top-level help.
+    """
+    if ctx.invoked_subcommand is None:
+        binary = shutil.which("pp")
+        if binary is None:
+            click.echo("prompts: pp not installed — run: tw dev install", err=True)
             raise SystemExit(1)
         result = subprocess.run([binary, "--help"], check=False)
         raise SystemExit(result.returncode)
