@@ -2228,3 +2228,81 @@ def decisions_supersede(old_slug: str, new_slug: str) -> None:
     old.meta.links.append(ThreadLink(rel="superseded-by", slug=new_slug))
     save_thread(old)
     click.echo(f"{old_slug} → superseded-by → {new_slug}")
+
+
+# ---------------------------------------------------------------------------
+# forums decisions export — render decided threads as textmap-ingestable md
+# ---------------------------------------------------------------------------
+
+
+@forums_decisions.command("export")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path),
+              default=None, help="Output directory (default: ~/.cache/paperworlds/textmap-decisions).")
+@click.option("--dry-run", is_flag=True, default=False, help="Print plan without writing files.")
+def decisions_export(out_dir: Path | None, dry_run: bool) -> None:
+    """Render every decided thread as a textmap-ingestable markdown file.
+
+    One file per thread at <out>/decision-<slug>.md with YAML frontmatter
+    (type=decision, description=summary, status=active|deprecated,
+    labels=[repos, tags], connections=[replaces|applies_to|implements]).
+    Consume with `textmap ingest <out>` — or run `tw map ingest decisions`
+    to do both in one.
+    """
+    from textworkspace.textmap_export import DEFAULT_EXPORT_DIR, decided_threads, export_all
+
+    root = get_root()
+    target = out_dir or DEFAULT_EXPORT_DIR
+    threads = decided_threads(root)
+
+    if dry_run:
+        click.echo(f"Would write to: {target}")
+        for t in threads:
+            slug = t.path.parent.name
+            click.echo(f"  decision-{slug}.md  — {t.meta.decision.summary if t.meta.decision else t.meta.title}")
+        click.echo(f"({len(threads)} decided thread(s))")
+        return
+
+    written = export_all(threads, target)
+    if not written:
+        click.echo(f"No decided threads to export. (out: {target})")
+        return
+    click.echo(f"Wrote {len(written)} file(s) to {target}")
+    for ef in written:
+        suffix = "  (superseded)" if ef.superseded else ""
+        click.echo(f"  {ef.path.name}{suffix}")
+    click.echo("")
+    click.echo(f"Next: textmap ingest {target}   (or `tw map ingest decisions`)")
+
+
+@forums_decisions.command("ingest")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False, path_type=Path),
+              default=None, help="Export directory (default: ~/.cache/paperworlds/textmap-decisions).")
+def decisions_ingest(out_dir: Path | None) -> None:
+    """Export decided threads and pipe them into textmap.
+
+    Convenience: runs `tw forums decisions export` then `textmap ingest <dir>`.
+    Requires textmap on PATH.
+    """
+    import shutil
+    import subprocess
+
+    from textworkspace.textmap_export import DEFAULT_EXPORT_DIR, decided_threads, export_all
+
+    textmap_bin = shutil.which("textmap")
+    if not textmap_bin:
+        raise click.ClickException(
+            "textmap not found on PATH — install it (tw init) or run `tw forums decisions export` manually"
+        )
+
+    target = out_dir or DEFAULT_EXPORT_DIR
+    threads = decided_threads(get_root())
+    written = export_all(threads, target)
+    click.echo(f"Exported {len(written)} decision file(s) to {target}")
+
+    if not written:
+        return
+
+    click.echo(f"→ {textmap_bin} ingest {target}")
+    result = subprocess.run([textmap_bin, "ingest", str(target)], capture_output=False)
+    if result.returncode != 0:
+        raise click.ClickException(f"textmap ingest exited {result.returncode}")
