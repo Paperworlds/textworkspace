@@ -106,3 +106,18 @@ def test_filter_by_profile_keeps_matching(tmp_path: Path) -> None:
     assert set(personal_only.keys()) == {"personal-a"}
     # Unknown profile → empty.
     assert filter_by_profile(cfg, repos, "ghost") == {}
+
+
+def test_scan_skips_symlinked_repo(tmp_path: Path) -> None:
+    """Symlinks in dev_root (back-compat aliases) are not double-counted."""
+    dev_root = tmp_path / "dev"
+    dev_root.mkdir()
+    real = _mk_dev_repo(dev_root, "real-name")
+    # Back-compat symlink: old name → real folder.
+    alias = dev_root / "old-name"
+    alias.symlink_to(real, target_is_directory=True)
+
+    cfg = Config(defaults={"dev_root": str(dev_root)})
+    repos = iter_all_repos(cfg)
+    assert "real-name" in repos
+    assert "old-name" not in repos

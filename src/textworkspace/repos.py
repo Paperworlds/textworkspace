@@ -29,6 +29,11 @@ def _scan_dev_root(dev_root: Path | None) -> dict[str, Path]:
     for child in sorted(dev_root.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
             continue
+        # Skip symlinks — they're usually back-compat aliases for renamed
+        # repos (e.g. paperagents -> textprompts) and would double-count
+        # the same repo under two names.
+        if child.is_symlink():
+            continue
         if any((child / marker).exists() for marker in ("pyproject.toml", "go.mod", "package.json", "Cargo.toml")):
             out[child.name] = child
     return out
