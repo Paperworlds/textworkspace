@@ -289,7 +289,7 @@ string so `tw doctor` can detect stale installs without re-running.
 ## Roadmap
 
 - [ ] `tw ideas expand <repo> <id>` — spawn a pp worker that opens a thread
-      with 2–3 proposals for an idea (coordination thread decided; paperagents
+      with 2–3 proposals for an idea (coordination thread decided; textprompts
       side has a draft `idea-expander` persona spec)
 - [ ] Live forums → textmap dual-write on `decide` / `supersede` (today:
       batch via `tw forums decisions ingest`)

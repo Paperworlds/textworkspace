@@ -516,7 +516,7 @@ _TOOL_ALIASES: dict[str, list[str]] = {
     "textworkspace": ["tw", "xtw"],
     "textsessions": ["ts"],
     "textaccounts": ["ta"],
-    "paperagents": ["pp"],
+    "textprompts": ["pp"],
     "textread": [],
     "textmap": [],
 }
@@ -531,7 +531,7 @@ _INSTALLABLE_TOOLS: list[tuple[str, str, list[str], dict[str, str]]] = [
     ("textforums", "TEXTFORUMS", [], {}),
     ("textaccounts", "TEXTACCOUNTS", ["ta"], {"switch": "show"}),
     ("textsessions", "TEXTSESSIONS", ["ts"], {}),
-    ("paperagents", "PAPERAGENTS", ["pp"], {}),
+    ("textprompts", "PAPERAGENTS", ["pp"], {}),
     ("textread", "TEXTREAD", [], {}),
     ("textmap", "TEXTMAP", [], {}),
 ]
@@ -912,7 +912,7 @@ def install(shell_type: str | None) -> None:
     \b
       1. tw wrapper (eval support for tw switch)
       2. Wrappers for tools that need eval (e.g. textaccounts switch)
-      3. Alias functions (ta -> textaccounts, ts -> textsessions, pp -> paperagents)
+      3. Alias functions (ta -> textaccounts, ts -> textsessions, pp -> textprompts)
       4. Tab completions for all installed tools
     """
     from textworkspace.shell import generate_bash, generate_fish, generate_zsh
@@ -2088,7 +2088,7 @@ def ideas_threads(repo_name: str, idea_id: str, status: str | None, show_all: bo
 def ideas_expand(repo_name: str, idea_id: str, model: str | None, dry_run: bool) -> None:
     """Spawn a pp worker that expands an idea into 2–3 proposals in a forum thread.
 
-    Consumer of the `idea-expander` spec owned by paperagents: shells out
+    Consumer of the `idea-expander` spec owned by textprompts: shells out
     to `pp persona run idea-expander --idea <repo>/<id>`, then records the
     thread slug back in the idea's `threads:` list so
     `tw ideas threads <repo> <id>` can find it.
@@ -2111,7 +2111,7 @@ def ideas_expand(repo_name: str, idea_id: str, model: str | None, dry_run: bool)
 
     pp_bin = shutil.which("pp")
     if pp_bin is None:
-        raise click.ClickException("pp not found on PATH — install paperagents first")
+        raise click.ClickException("pp not found on PATH — install textprompts first")
 
     cmd = [pp_bin, "persona", "run", "idea-expander", "--idea", f"{repo_name}/{idea_id}"]
     if model:
