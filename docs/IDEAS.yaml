@@ -82,6 +82,26 @@ brainstorm:
       - "Expands pp-context-injection (under forums-agent-integration) from 'read-only' to 'read+write'."
       - "The pp→textmap protocol nodes idea is downstream: once pp emits thread events, textmap can ingest them as decision/protocol nodes."
       - "Relies on pins+decisions (PLAN-pins-decisions.md) — workers need status=decided for the handoff to be canonical."
+    concrete_mvp:
+      title: "sub-agent spec with forums as the lead↔worker wire"
+      why: >
+        Best test bed for the 0.11.0 API (pins + decisions + --profile inbox):
+        a pp spec about running a sub-agent that speaks to its lead via a
+        textforum thread in the spec's target repo. Gives us an end-to-end
+        loop — LEAD pins the thread on open, worker appends step entries,
+        worker (or LEAD on success) marks decide, subsequent runs read via
+        `tw forums inbox --as worker-NNN --format prompt`.
+      spec_lives: paperagents/docs/specs/sub-agent-forums.md (to be written)
+      target_repo: configurable per run; default is the spec's repo
+      minimum_surface_used:
+        - "textforums new --repo <target> --to worker-NNN --spec <slug> --pin"
+        - "textforums add <slug> --content \"STEP N: … — PASS\""
+        - "textforums decide <slug> --summary \"<outcome>\""
+        - "tw forums inbox --repo <target> --as worker-NNN --format prompt   # for re-entry"
+      success_signal: >
+        A run can be resumed in a fresh session purely by reading the thread
+        (no log files consulted). If that works, pp-forums-integration graduates
+        from brainstorm to implementation.
 
   - name: forums-agent-integration
     title: Enforce forums usage in agent sessions
