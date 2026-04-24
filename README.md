@@ -2,78 +2,67 @@
 
 **Meta CLI and package manager for the [Paperworlds](https://github.com/paperworlds) text- stack.**
 
-One install, one CLI surface. Bootstraps tools, manages workflows, unifies status across the entire stack.
+One install, one CLI surface. Bootstraps tools, manages workflows, and gives your
+repos — and the agents working on them — a shared communication layer: threads,
+decisions, specs, and ideas, all queryable from the terminal.
 
 ## Install
 
 ```bash
 pipx install textworkspace
 tw init
+tw shell install --fish      # or --bash / --zsh
 ```
 
-`tw init` discovers existing tools, prompts for missing dependencies, and bootstraps Go binaries from GitHub releases. To enable shell integration (required for `tw switch`):
+`tw init` discovers existing tools, prompts for missing ones, and bootstraps Go
+binaries from GitHub releases. The shell wrapper is required for commands that
+need to modify shell state (`tw switch`, `ta switch`).
+
+Optional — enable tab completion:
 
 ```bash
-tw shell install --fish   # or --bash / --zsh
+env _TW_COMPLETE=fish_source tw > ~/.config/fish/completions/tw.fish
+env _TEXTFORUMS_COMPLETE=fish_source textforums > ~/.config/fish/completions/textforums.fish
 ```
 
-## Usage
+## What it gives you
 
-### Core commands
+### 1. One tool to manage the stack
 
-| Command | Description |
-|---------|-------------|
-| `tw init` | Initialise config and install dependencies |
-| `tw status` | Unified stack view: profile, proxy, servers, sessions |
-| `tw doctor` | Check all binaries and services are healthy |
-| `tw update [tool]` | Update managed binaries and packages to latest |
-| `tw switch <profile>` | Switch active workspace profile (requires shell wrapper) |
-| `tw sessions [query]` | Launch or search textsessions |
-| `tw stats` | Aggregate stats across sessions and accounts |
-| `tw serve [name]` | Start or inspect textserve servers |
-| `tw config show` | Print config as YAML |
-| `tw which <tool>` | Print path of a managed binary |
-| `tw dev install` | Reinstall all dev tools from local repos (editable) |
+```
+tw init              # guided first-run, bootstraps binaries
+tw status            # unified view: profile, proxy, servers, sessions
+tw doctor            # health + stale paths + spec conformance across repos
+tw up / tw down      # bring the whole MCP fleet up / down via textserve
+tw update [tool]     # update managed binaries and packages
+tw dev install       # install every tool from its local repo (editable mode)
+tw sync              # reinstall after pulling; also reconciles combos
+tw which <tool>      # where is this binary installed, what version
+```
 
-### Workspaces
+Each installed tool also becomes a passthrough: `tw proxy <anything>`,
+`tw serve <anything>`, `tw read <anything>`, `tw accounts <anything>`,
+`tw map <anything>` forward unknown subcommands to the real binary — so
+`tw` is one muscle-memory entry point, not a shim that hides features.
 
-A workspace is a named join of profile + servers + project. One command to switch context.
+### 2. Workspaces + combos
+
+A **workspace** is a named join of profile + servers + project — one command
+to switch context. **Combos** are YAML recipes for multi-step workflows.
 
 ```bash
-tw start data              # switch profile, start servers, open session
-tw start data my-session   # same, with a custom session name
-tw stop data               # stop workspace servers
-tw workspaces list         # show all configured workspaces
-tw workspaces status       # show active workspace
-tw workspaces add          # add a new workspace interactively
-tw workspaces edit         # open config.yaml in $EDITOR
+tw start data              # switch profile, start servers, open a session
+tw start data my-session   # same, custom session name
+tw stop data
+tw workspaces list / status / add / edit
+
+tw <combo> [args]          # any combo name becomes a top-level command
+tw --dry-run <combo>       # preview without executing
+tw combos list / edit / export / update / remove
+tw combos install gh:paperworlds/textcombos/workday
 ```
 
-Config in `~/.config/paperworlds/config.yaml`:
-
-```yaml
-workspaces:
-  data:
-    description: "Data work"
-    profile: work
-    servers:
-      tags: [data]
-    project: ~/projects/data
-```
-
-### Combos
-
-Combos are YAML workflow recipes stored in `~/.config/paperworlds/combos.yaml` or `combos.d/`.
-
-```bash
-tw up              # Start proxy and default servers
-tw down            # Stop all servers and proxy
-tw reset <profile> # Switch profile and restart stack
-tw <combo> [args]  # Run any custom combo by name
-tw --dry-run <combo>  # Preview steps without executing
-```
-
-Define your own:
+Example combo:
 
 ```yaml
 combos:
@@ -87,83 +76,216 @@ combos:
       - run: servers start --tag default
 ```
 
-Install from community:
+### 3. Repo registry + profiles
+
+`tw` keeps a registry of repos you work on — personal, work, scratch — so
+every cross-repo command (forums, ideas, specs) agrees on what "mono" or
+"textread" means. Filter by `profile` to separate work from personal.
 
 ```bash
-tw combos install gh:paperworlds/textcombos/workday
-tw combos install https://gist.github.com/user/xyz
-tw combos list / edit / export / update / remove
+tw repo add mono /Users/projects/paradigm/mono --profile work
+tw repo list [--profile work]
+tw repo move mono /new/path   # updates config + ~/.claude/projects + every tool's own config
+tw repo import                # pull repos from any tool that exposes them
 ```
 
-### textforums
+When a folder moves, `tw repo move` orchestrates: rename on disk,
+rewrite `config.yaml`, rename `~/.claude/projects/<encoded>`, and call
+each installed tool's `<tool> repo move` to update downstream state.
+`tw doctor` aggregates `STALE <name> <path>` warnings from every tool
+that implements the contract.
 
-Thread-based discussion CLI for async notes, decisions, and bug reports across the stack.
+### 4. textforums — threads, pins, decisions, inbox
 
-| Command | Description |
-|---------|-------------|
-| `textforums new --title "…" --tag bug` | Create a new thread |
-| `textforums list [--status open\|resolved] [--tag t] [--query q]` | List threads with optional filters |
-| `textforums show <slug>` | Show full thread with entries and metadata |
-| `textforums add <slug> --content "…"` | Add a reply entry |
-| `textforums edit-entry <slug> <n>` | Edit entry N in place (opens `$EDITOR` or use `--content`) |
-| `textforums close <slug>` | Mark thread resolved |
-| `textforums reopen <slug>` | Reopen a resolved thread |
-| `textforums bulk-close --tag sprint` | Close all matching open threads at once |
-| `textforums link <slug> --blocks <other>` | Add a typed link between threads (`--blocks` or `--relates-to`) |
-| `textforums tags` | List all tags in use across threads |
-| `textforums doctor` | Print stale open threads (idle >14 days) — consumed by `tw doctor` |
-| `textforums edit <slug>` | Open thread YAML in `$EDITOR` |
+Async notes, bug reports, cross-repo coordination — agents and humans in
+the same channel. Threads live in `~/.textforums/<slug>/thread.yaml`.
 
-Threads live in `~/.textforums/<slug>/thread.yaml`. Root overridable via `$TEXTFORUMS_ROOT` or `config.forums.root`. Also available as `tw forums <subcommand>`.
+```bash
+textforums new --title "proxy status broken" --repo textworkspace --tag bug
+textforums list --repo textworkspace --status open
+textforums show <slug>
+textforums add <slug> --content "reproduced on 0.4.2"
+textforums close <slug> --content "shipped in 0.4.3"
+```
+
+Also available as `tw forums <sub>` — same commands, same semantics.
+
+**Pins** — mark a thread urgent so it surfaces above everything else:
+
+```bash
+textforums pin <slug>                      # priority=high
+textforums pin <slug> --until 2026-12-31   # auto-expire
+textforums new --pin --title "…"           # pin on create
+```
+
+**Decisions** — promote a concluded thread to canonical, ADR-lite:
+
+```bash
+textforums decide <slug> --summary "Use protobuf for the wire format."
+tw forums decisions list [--repo X] [--query T] [--since YYYY-MM-DD]
+tw forums decisions show <slug>
+tw forums decisions supersede <old> <new>      # ADR-history pattern
+```
+
+Once decided, the thread is frozen (title + decision fields) and drops
+out of inbox by default — decisions are the law, not the queue.
+
+**Inbox** — per-repo mailbox with unread state, one-stop agent onboarding:
+
+```bash
+tw forums inbox                                # this repo, CWD-inferred
+tw forums inbox --as reviewer                  # address-filtered
+tw forums inbox --profile work                 # aggregate across all work repos
+tw forums inbox --format prompt                # paste-ready dump for handoff
+tw forums inbox --mark-read                    # once you've processed it
+```
+
+`--format prompt` is the key primitive for agent handoffs — a fresh
+session can resume purely by reading the thread.
+
+Every thread carries rich context (`repos`, `paths`, `spec`, `to`,
+`mentions`, `commit`) so filters compose:
+
+```bash
+textforums new --title "migration plan" \
+  --repo textworkspace --repo textaccounts \
+  --spec textaccounts-api \
+  --to reviewer --mention deployer \
+  --tag planning --pin
+```
+
+Run `tw forums quickstart` for a 30-second agent onboarding, or
+`tw forums example` for an annotated lifecycle.
+
+### 5. Cross-repo specs
+
+Owned by one repo, followed by others, checked automatically.
+Specs live in the owner repo at `docs/specs/<slug>.md` (YAML frontmatter
++ markdown body); consumers declare what they follow in `docs/SPECS.yaml`
+and mark implementations with `# SPEC: <slug>` comments in source.
+
+```bash
+tw forums spec new <slug> --owner <repo> --title "..."
+tw forums spec list [--owner R] [--consumer R] [--status S]
+tw forums spec show <slug>
+tw forums spec refs <slug>              # grep `# SPEC:` markers across repos
+tw forums spec check [--repo R]         # conformance check
+tw forums spec adopt <slug>             # freeze frontmatter (slug/owner/version/…)
+tw forums spec supersede <old> <new>
+tw forums spec brief [--repo R]         # agent-ready 'what do I own / follow' brief
+tw forums spec explain                  # the full format reference, inline
+```
+
+Drift is surfaced by `tw doctor` — missing implementations, pinned
+versions out of sync with upstream, frozen fields mutated post-adoption.
+
+### 6. Ideas across all your repos
+
+Discover and aggregate `IDEAS.yaml` (or directory of per-file YAMLs) from
+every registered repo. Personal repos drop a `docs/IDEAS.yaml`; work
+repos can use `.files/ideas/*.yaml` where each file is one idea.
+
+```bash
+tw ideas list                                    # profile | repo | id | status | title
+tw ideas list --profile work
+tw ideas list --status planned --query forums
+tw ideas show mono deploy-notifications          # full reasoning, not just summary
+tw ideas threads mono deploy-notifications       # forum threads tagged idea:mono/deploy-notifications
+tw ideas quickstart                              # onboarding
+```
+
+Idea → thread link is by tag convention (`idea:<repo>/<id>`), so
+expansion / proposal / decision loops use the same forums primitives.
+
+## A 60-second tour
+
+```bash
+# 1. Set the stage
+tw init && tw shell install --fish
+tw repo add mono ~/work/mono --profile work
+
+# 2. See what's pending
+tw forums inbox --profile work --format prompt | pbcopy   # paste into next session
+
+# 3. Capture an idea at work
+mkdir -p ~/work/mono/.files/ideas
+cat > ~/work/mono/.files/ideas/deploy-notifications.yaml <<'YAML'
+title: "Deploy notifications for all services in #eng-team-delta"
+status: brainstorm
+priority: 2
+summary: Extend the paradex-backend→Jenkins→Slack hook to the whole stack.
+YAML
+tw ideas list --profile work
+
+# 4. Open discussion, pin it, decide
+textforums new \
+  --title "expand: deploy notifications" \
+  --repo mono --to lead \
+  --tag idea:mono/deploy-notifications --pin
+textforums add <slug> --content "Proposal A: central Jenkins listener…"
+textforums decide <slug> --summary "Going with Proposal A"
+
+# 5. Promote to a cross-repo spec once it's durable
+tw forums spec new mono-deploy-notifs --owner mono --title "Deploy notif protocol"
+```
 
 ## Configuration
 
 ```
-~/.config/paperworlds/config.yaml   # tools, versions, defaults
+~/.config/paperworlds/config.yaml   # tools, versions, defaults, repos, workspaces
 ~/.config/paperworlds/combos.yaml   # user combos
 ~/.config/paperworlds/combos.d/     # community combos
+~/.textforums/<slug>/thread.yaml    # forum threads + per-repo last_read state
 ```
 
-Schema excerpt:
-
-```yaml
-tools:
-  textaccounts:
-    version: 0.3.1
-    source: pypi
-  textproxy:
-    version: 0.5.0
-    source: github
-    bin: ~/.local/share/textworkspace/bin/textproxy
-defaults:
-  profile: work
-  proxy_autostart: false
-```
+`$TEXTFORUMS_ROOT` overrides the forums root; `config.forums.root` overrides
+the default per install. `$TEXTFORUMS_AUTHOR` / `config.forums.author` set the
+default author for new entries.
 
 ## How it works
 
-`tw init` interrogates the system for each known tool — Python packages via `uv`, Go binaries via GitHub Releases — and records versions and binary paths in `config.yaml`. On subsequent runs, `tw doctor` re-checks each binary and flags drift.
+`tw init` interrogates the system for each known tool — Python packages via
+`uv`, Go binaries via GitHub Releases — and records versions and binary
+paths in `config.yaml`. Go tools (textproxy, textserve) ship as pre-built
+archives verified against a `.sha256` sidecar and unpacked into
+`~/.local/share/textworkspace/bin/`; symlinks point at the active version.
 
-Go tools (textproxy, textserve) are fetched as pre-built archives and unpacked into `~/.local/share/textworkspace/bin/`. A symlink points to the active version; old versions are kept for rollback. Archives follow the naming convention `<tool>-v<version>-<os>-<arch>.tar.gz` and are verified against a `.sha256` sidecar.
+Combos are loaded at startup from all YAML files in `combos.yaml` and
+`combos.d/`. Each combo declares steps using a small DSL (`run`, `skip_if`,
+`args`) and the combo name becomes a top-level `tw` subcommand via dynamic
+dispatch.
 
-Combos are loaded at startup from all YAML files in `combos.yaml` and `combos.d/`. Each combo declares steps using a small DSL: `run` (shell command via the tool's own CLI), `skip_if` (condition expression), and `args` (named positional arguments). Dynamic dispatch means any combo name becomes a top-level `tw` subcommand.
+Passthrough groups (`tw proxy`, `tw serve`, `tw read`, `tw accounts`,
+`tw map`) forward unknown subcommands to the underlying binary with a
+custom Click group — so the full tool surface is always reachable without
+re-implementing every subcommand here.
 
-Shell integration works by writing fish/bash/zsh wrapper functions via `tw shell install`. The wrappers handle commands that modify shell state (`tw switch`, `ta switch`) which cannot work as subprocess calls.
+Cross-repo features (forums, specs, ideas) share a repo registry — the
+union of `config.repos` and a scan of `dev_root`. Registered entries win
+on conflict and can carry a `profile` tag used by `--profile` filters.
 
-`tw dev install` builds every tool from local repo checkouts in editable mode (`uv tool install -e`), then records the git hash in the version string so `tw doctor` can detect stale installs without re-running the install.
+Shell integration writes fish/bash/zsh wrapper functions via
+`tw shell install`. The wrappers handle commands that modify shell state
+(`tw switch`, `ta switch`) which cannot work as subprocess calls.
+
+`tw dev install` builds every tool from local repo checkouts in editable
+mode (`uv tool install -e`), then records the git hash in the version
+string so `tw doctor` can detect stale installs without re-running.
 
 ## Roadmap
 
-- [ ] `tw repo move <name> <new-path>` — orchestrate path updates across all tools when a repo moves
-- [ ] `tw doctor` — aggregate `STALE` lines from each tool's own `doctor` command
-- [ ] `tw sync` — push repos from `config.yaml` into each tool's own config
-- [ ] `tw repo import` — pull repos from any tool that exposes `<tool> repos`
+- [ ] `tw ideas expand <repo> <id>` — run a pp worker that opens a thread
+      with 2–3 proposals for an idea (coordination thread already open with paperagents)
+- [ ] Native textforums → textmap ingestion: `status=decided` threads become
+      Decision nodes; `superseded-by` links become edges
+- [ ] Extract `textforums` into its own repo (current home: inside textworkspace)
 - [ ] Publish to PyPI
+- [ ] `tw forums decisions import` — pull paper ADRs from any repo that ships them
 
 ## Part of Paperworlds
 
-textworkspace is part of [Paperworlds](https://github.com/paperworlds) — an open org
-building tools and games around AI agents and text interfaces.
+textworkspace is part of [Paperworlds](https://github.com/paperworlds) — an
+open org building tools and games around AI agents and text interfaces.
 
 ## License
 
