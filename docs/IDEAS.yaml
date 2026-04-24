@@ -34,6 +34,55 @@ brainstorm:
       - "Do we publish textforums to PyPI, or keep it github-install like the rest of the stack?"
       - "Should the first spec authored in textforums be the textforums protocol itself (api, ThreadMeta shape)?"
 
+  - name: pp-forums-integration
+    title: pp uses textforums as the lead↔worker communication channel
+    priority: 1
+    status: brainstorm
+    date: "2026-04-24"
+    description: >
+      paperagents (pp) currently coordinates between LEAD (spec author) and
+      WORKER (claude -p session) via filesystem artifacts: prompts/, logs/,
+      reports/, .state. textforums primitives (context.repos/to/spec,
+      decide, --format prompt, inbox) now cover the same shape — but add
+      cross-worker awareness, durable handoffs, and human drop-in mid-run.
+      The playbook YAML stays as the contract; the thread is the runtime trace.
+    mapping:
+      - "prompts/NNN-slug.yaml              → spec (or a reference to one)"
+      - "pp run NNN (spawns worker)         → thread with --to worker-NNN --spec <slug> --commit <HEAD>"
+      - "progress.log (per-step append)     → textforums add <thread> --content \"STEP N: ... — PASS\""
+      - "reports/NNN-slug.report.md         → textforums decide <thread> --summary \"...\""
+      - ".state (DONE|PARTIAL|BLOCKED)      → status=decided (DONE) / status=open (PARTIAL/BLOCKED)"
+      - "LEAD reads reports                 → tw forums inbox --repo <repo> --as lead"
+      - "Worker hits blocker                → textforums new --to <other-repo> --mention lead"
+    what_forums_adds:
+      - "Cross-worker awareness: worker 003 sees what 002 did on the same spec."
+      - "Blocker routing: a cross-repo block lands in both repos' inboxes."
+      - "Durable handoffs: next session reads tw forums decisions --since <date> instead of parsing logs."
+      - "Human entry point: LEAD can add context mid-run without re-parsing the spec."
+    what_forums_does_not_replace:
+      - "The playbook YAML — spec is the contract, thread is the trace."
+      - "High-frequency per-step output (test output, grep results): still in logs/."
+      - "Budget/model selection: pp decides that."
+    shape_of_change:
+      pp_side:
+        - "On pp run: open a thread with context.to=worker-NNN, spec=<slug>, commit=HEAD, repos=[<repo>]."
+        - "Each step logged via textforums add."
+        - "On completion: textforums decide (DONE) or final [BLOCKED]/[PARTIAL] entry with status=open."
+        - "On start: inject thread history into worker context — tw forums inbox --format prompt already does this."
+      config: >
+        pipeline.yaml gains forums_channel: true (opt-in). Existing file-based
+        flow stays as the default path; forums integration is additive.
+    open_question: >
+      Do worker entries go in the playbook's own thread (readable narrative,
+      but polluted by retries) or in a companion child thread linked with
+      rel: run-of (cleaner separation; parent is 'what we decided to do',
+      child is 'how run #3 went')? Lean: companion. Parent is long-lived
+      'decisions ledger', run threads can be GC'd after retention window.
+    relation_to_other_ideas:
+      - "Expands pp-context-injection (under forums-agent-integration) from 'read-only' to 'read+write'."
+      - "The pp→textmap protocol nodes idea is downstream: once pp emits thread events, textmap can ingest them as decision/protocol nodes."
+      - "Relies on pins+decisions (PLAN-pins-decisions.md) — workers need status=decided for the handoff to be canonical."
+
   - name: forums-agent-integration
     title: Enforce forums usage in agent sessions
     priority: 1
