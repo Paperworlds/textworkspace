@@ -1260,7 +1260,7 @@ def test_shell_install_fish_wrappers_and_aliases(tmp_path, monkeypatch):
             return f"/usr/local/bin/{name}"
         if name == "textsessions":
             return None
-        if name == "paperagents":
+        if name == "textprompts":
             return None
         return real_which(name)
 
@@ -1304,7 +1304,7 @@ def test_shell_install_fish_wrappers_and_aliases(tmp_path, monkeypatch):
 
     # Missing tools skipped
     assert "textsessions: not installed" in result.output
-    assert "paperagents: not installed" in result.output
+    assert "textprompts: not installed" in result.output
 
 
 def test_shell_install_skips_missing_tools(tmp_path, monkeypatch):

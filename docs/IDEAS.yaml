@@ -43,9 +43,9 @@ brainstorm:
     open_questions:
       - "Does pp persona run grow an --interactive flag that skips the subprocess spawn and instead injects the persona system prompt into the current REPL turn? Or is this a separate command: tw persona use <name>?"
       - "How does budget work for interactive? Probably: budget_usd: null + max_turns: null (user bounded)."
-      - "Does the persona ship in paperagents/personas/ alongside idea-expander, or is an interactive persona a different artifact altogether?"
+      - "Does the persona ship in textprompts/personas/ alongside idea-expander, or is an interactive persona a different artifact altogether?"
     relation_to_other_ideas:
-      - "Expands SPEC: idea-expander (owner paperagents) with a second mode: interactive."
+      - "Expands SPEC: idea-expander (owner textprompts) with a second mode: interactive."
       - "textmap-inbox-reviewer is pre-req for the 'ingest forum decisions' loop to stay healthy — bad proposals need a human gate."
 
   - name: extract-textforums-repo
@@ -86,7 +86,7 @@ brainstorm:
     status: brainstorm
     date: "2026-04-24"
     description: >
-      paperagents (pp) currently coordinates between LEAD (spec author) and
+      textprompts (pp) currently coordinates between LEAD (spec author) and
       WORKER (claude -p session) via filesystem artifacts: prompts/, logs/,
       reports/, .state. textforums primitives (context.repos/to/spec,
       decide, --format prompt, inbox) now cover the same shape — but add
@@ -137,7 +137,7 @@ brainstorm:
         loop — LEAD pins the thread on open, worker appends step entries,
         worker (or LEAD on success) marks decide, subsequent runs read via
         `tw forums inbox --as worker-NNN --format prompt`.
-      spec_lives: paperagents/docs/specs/sub-agent-forums.md (to be written)
+      spec_lives: textprompts/docs/specs/sub-agent-forums.md (to be written)
       target_repo: configurable per run; default is the spec's repo
       minimum_surface_used:
         - "textforums new --repo <target> --to worker-NNN --spec <slug> --pin"
@@ -602,22 +602,22 @@ developer_workflow:
       Rule-based, standalone background daemon. Watches configured paths for
       filesystem events and fires actions (notify, trigger, log) when patterns
       match. Generalizes and replaces the pp daemon currently baked into
-      paperagents — that daemon's behavior becomes a built-in rule set.
+      textprompts — that daemon's behavior becomes a built-in rule set.
       Separate repo (paperworlds/textwatch), managed via textworkspace like
       textproxy (tw watch start/stop/status/log).
     why: >
-      The pp daemon (paperagents/daemon.py) already does polling, PID management,
+      The pp daemon (textprompts/daemon.py) already does polling, PID management,
       lock files, double-fork, discovery, health, and notification — but it is
-      hardcoded to paperagents concepts (pipeline.yaml, .state files, prompt slugs).
+      hardcoded to textprompts concepts (pipeline.yaml, .state files, prompt slugs).
       Any other tool that needs reactive behavior would have to duplicate all of
       that plumbing. textwatch extracts the infrastructure, makes it rule-driven,
       and lets every text- tool register its own watch rules without owning a daemon.
     supersedes:
-      target: paperagents/daemon.py + paperagents/daemon CLI commands
+      target: textprompts/daemon.py + textprompts/daemon CLI commands
       migration: >
         Once textwatch is stable, pp daemon commands (pp daemon start/stop/status)
         become thin wrappers that ensure textwatch is running with the pp rule set
-        loaded. Eventually the embedded daemon in paperagents is removed entirely.
+        loaded. Eventually the embedded daemon in textprompts is removed entirely.
     architecture:
       core: >
         Single poll loop (default 2s, configurable). On each tick, evaluates all
@@ -627,7 +627,7 @@ developer_workflow:
         # in ~/.config/paperworlds/textwatch.yaml or per-project pipeline.yaml
         rules:
           - name: pp-state-notify
-            path: ~/.config/paperagents/state/         # or glob pattern
+            path: ~/.config/textprompts/state/         # or glob pattern
             pattern: "*.state"
             on: [modified, created]
             action: notify
@@ -659,7 +659,7 @@ developer_workflow:
         Later: watchdog / kqueue (macOS FSEvents) as optional backend for
         lower latency and no CPU spin on idle. Toggle via config.
     migration_coupling_points: >
-      The three places in paperagents/daemon.py that couple the loop to pp-specific
+      The three places in textprompts/daemon.py that couple the loop to pp-specific
       concepts — extract these as pluggable callbacks and the loop becomes textwatch's
       generic core:
       coupling:
@@ -675,7 +675,7 @@ developer_workflow:
 
     pp_builtin_rules: >
       textwatch ships with a built-in pp rule set that replicates current
-      paperagents daemon behavior: watch registered_paths for *.state changes
+      textprompts daemon behavior: watch registered_paths for *.state changes
       → send macOS notification; health_tick for stale tasks; discovery_tick
       for new projects. pp daemon config (registered_paths, stale_minutes,
       poll_interval) is read by textwatch so migration is zero-config.
@@ -939,7 +939,7 @@ cognitive_architecture:
 
     recall_engine:
       name: Recall / delivery
-      tool: pp context injection (paperagents)
+      tool: pp context injection (textprompts)
       holds: Pulls episodic + semantic layers together before agent starts
       note: >
         pp run queries forums + textmap, merges results, prepends a unified
@@ -1067,19 +1067,19 @@ forums_textmap_spec:
       effort: low
     - phase: 2
       what: pp context injection (forums only)
-      where: paperagents
+      where: textprompts
       effort: medium
     - phase: 3
       what: Write-on-block prompt template
-      where: paperagents/prompts
+      where: textprompts/prompts
       effort: low
     - phase: 4
       what: pp post-task scan
-      where: paperagents
+      where: textprompts
       effort: medium
     - phase: 5
       what: Forums as dependency
-      where: paperagents
+      where: textprompts
       effort: medium
     - phase: 6
       what: Code-level nodes in graph
@@ -1087,11 +1087,11 @@ forums_textmap_spec:
       effort: medium
     - phase: 7
       what: graphk query in pp injection
-      where: paperagents, graph-roadmap
+      where: textprompts, graph-roadmap
       effort: medium
     - phase: 8
       what: Merge/dedup logic
-      where: paperagents
+      where: textprompts
       effort: medium
     - phase: 9
       what: textmap auto-posts forum threads
@@ -1311,7 +1311,7 @@ repo_decisions:
     - name: tw actions
       reason: YAML playbooks executed by tw run
 
-  lives_in_paperagents:
+  lives_in_textprompts:
     - name: textbench
       as: pp bench
-      reason: tests prompts, which is paperagents' domain
+      reason: tests prompts, which is textprompts' domain
