@@ -172,3 +172,31 @@ def test_append_thread_backlink_md_refuses(tmp_path: Path) -> None:
 def test_append_thread_backlink_yaml_import(tmp_path: Path) -> None:
     # Bare import guard (the module uses yaml internally).
     import yaml as _  # noqa: F401
+
+
+def test_directory_scan_isolates_one_bad_file(tmp_path: Path) -> None:
+    """One broken .yaml in .files/ideas/ surfaces as an error entry; siblings continue."""
+    repo = _mkrepo(tmp_path, "mixed")
+    (repo / ".files" / "ideas").mkdir(parents=True)
+    (repo / ".files" / "ideas" / "good.yaml").write_text("title: Good\nstatus: idea\n")
+    (repo / ".files" / "ideas" / "broken.yaml").write_text("title: Bad\nweird: : :\n")
+    (repo / ".files" / "ideas" / "also-good.yaml").write_text("title: Also\nstatus: idea\n")
+
+    ideas = sorted(load_ideas_for_repo(repo), key=lambda i: i.id)
+    by_id = {i.id: i for i in ideas}
+    assert "good" in by_id
+    assert "also-good" in by_id
+    # Broken one is reported as an error entry, not silently dropped.
+    assert any(i.status == "error" for i in ideas)
+    # List length == 3 (good + broken + also-good); scan didn't abort.
+    assert len(ideas) == 3
+
+
+def test_load_all_ideas_isolates_broken_repo(tmp_path: Path) -> None:
+    """A parse error in one repo doesn't break discovery of the others."""
+    _mkrepo(tmp_path, "good-repo", ideas_yaml="ideas:\n  - id: a\n    title: A\n    status: idea\n")
+    _mkrepo(tmp_path, "broken-repo", ideas_yaml="ideas:\n  - bad yaml: : :\n")
+    ideas = load_all_ideas(tmp_path)
+    # Both repos contributed — the broken one yields an error entry.
+    repos_seen = {i.repo for i in ideas}
+    assert repos_seen == {"good-repo", "broken-repo"}

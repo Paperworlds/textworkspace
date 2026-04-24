@@ -2,6 +2,52 @@
 # Ordered by priority within each category
 
 brainstorm:
+  - name: interactive-personas
+    title: Interactive personas — inbox/review loops driven from the current session
+    priority: 1
+    status: brainstorm
+    date: "2026-04-24"
+    description: >
+      idea-expander nails the standalone/ephemeral persona shape: fire-and-forget
+      worker with bounded budget, output as a forum thread. But some reviews
+      are inherently interactive — they need to read a small backlog, surface
+      one item at a time, and wait for the user to accept/edit/skip. Those
+      shouldn't be spawned as isolated subprocesses. They should run as
+      *inline personas* within the current Claude session, using its memory
+      and prompt continuity. Two concrete candidates:
+    candidates:
+      - id: idea-inbox-validator
+        goal: >
+          Walk `tw ideas list` and interactively flag malformed entries,
+          stale brainstorm items, duplicates, or ideas that already have a
+          decided thread (→ close the idea). User says keep/fix/drop for
+          each.
+        wiring_sketch:
+          - "pp persona run idea-inbox-validator   (interactive=true)"
+          - "persona prompt: for each idea in tw ideas list --status brainstorm, present summary + decision threads + age, then WAIT for user input."
+          - "no budget cap — it's the user's time, not tokens, that bounds the run."
+      - id: textmap-inbox-reviewer
+        goal: >
+          Walk textmap's 'proposed' inbox (nodes suggested via propose_node
+          that haven't been accepted into the graph yet). Present each with
+          context (type, connections, source), user says accept/reject/edit.
+          Arguably MORE important than the idea inbox — the graph only stays
+          useful if the inbox drains.
+        wiring_sketch:
+          - "pp persona run textmap-inbox-reviewer   (interactive=true)"
+          - "tool scope: textmap MCP (query_node, expand, propose_node, and future accept_proposal)"
+          - "prompt: for each proposed node, surface neighbors + existing similar nodes, wait for user verdict."
+    distinction_from_idea_expander:
+      - "idea-expander: standalone, isolated subprocess, outputs a thread, no live user."
+      - "interactive personas: run in the live session, persona is the *prompt shape*, tool scope + system prompt, but no subprocess spawn."
+    open_questions:
+      - "Does pp persona run grow an --interactive flag that skips the subprocess spawn and instead injects the persona system prompt into the current REPL turn? Or is this a separate command: tw persona use <name>?"
+      - "How does budget work for interactive? Probably: budget_usd: null + max_turns: null (user bounded)."
+      - "Does the persona ship in paperagents/personas/ alongside idea-expander, or is an interactive persona a different artifact altogether?"
+    relation_to_other_ideas:
+      - "Expands SPEC: idea-expander (owner paperagents) with a second mode: interactive."
+      - "textmap-inbox-reviewer is pre-req for the 'ingest forum decisions' loop to stay healthy — bad proposals need a human gate."
+
   - name: extract-textforums-repo
     title: Extract textforums into its own repo (textforums)
     priority: 1
