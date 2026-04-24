@@ -1800,12 +1800,23 @@ def ideas_list(status: str | None, repo: str | None, profile: str | None, query:
         click.echo("No ideas found.")
         return
 
+    # Show the profile column when no --profile filter is applied (it's the
+    # most useful axis to eyeball across repos). Hide it when already filtered.
+    from textworkspace.repos import profiles as _profiles
+    show_profile = profile is None
+    prof_map = _profiles(load_config()) if show_profile else {}
+
     repo_w = max(len(i.repo) for i in ideas)
     id_w = min(max(len(i.id) for i in ideas), 32)
     status_w = max(len(i.status) for i in ideas)
+    prof_w = max((len(prof_map.get(i.repo, "") or "-") for i in ideas), default=0) if show_profile else 0
     for i in ideas:
         prio = f"p{i.priority} " if i.priority else ""
-        click.echo(f"  {i.repo:<{repo_w}}  {i.id[:id_w]:<{id_w}}  {i.status:<{status_w}}  {prio}{i.title}")
+        if show_profile:
+            prof = prof_map.get(i.repo, "") or "-"
+            click.echo(f"  {prof:<{prof_w}}  {i.repo:<{repo_w}}  {i.id[:id_w]:<{id_w}}  {i.status:<{status_w}}  {prio}{i.title}")
+        else:
+            click.echo(f"  {i.repo:<{repo_w}}  {i.id[:id_w]:<{id_w}}  {i.status:<{status_w}}  {prio}{i.title}")
 
 
 @ideas_cmd.command("show")
