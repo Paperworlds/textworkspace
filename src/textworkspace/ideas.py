@@ -63,6 +63,9 @@ class Idea:
     status: str
     priority: int | None = None
     summary: str = ""
+    # Raw source dict — preserved so `ideas show` can surface custom fields
+    # (open_questions, mapping, etc.) that the structured shape drops.
+    raw: dict | None = None
 
     @property
     def format(self) -> str:
@@ -127,7 +130,11 @@ def _item_to_idea(repo_name: str, path: Path, id_hint: str | None, item: dict) -
         priority = None
     summary_val = item.get("summary") or item.get("description") or ""
     summary = str(summary_val).strip()
-    return Idea(repo=repo_name, path=path, id=idea_id, title=title, status=status, priority=priority, summary=summary)
+    return Idea(
+        repo=repo_name, path=path, id=idea_id, title=title,
+        status=status, priority=priority, summary=summary,
+        raw=dict(item),
+    )
 
 
 def _load_single_file(repo_name: str, path: Path) -> list[Idea]:

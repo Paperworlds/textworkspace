@@ -1858,6 +1858,17 @@ def ideas_show(repo_name: str, idea_id: str | None) -> None:
             if i.summary:
                 click.echo("")
                 click.echo(i.summary)
+            # Dump any extra fields (open_questions, mapping, ideas, …) so
+            # structured reasoning captured in the YAML survives `show`.
+            if i.raw:
+                import yaml as _yaml
+                _shown = {"id", "name", "slug", "title", "status", "priority",
+                          "summary", "description"}
+                extras = {k: v for k, v in i.raw.items() if k not in _shown}
+                if extras:
+                    click.echo("")
+                    click.echo("---")
+                    click.echo(_yaml.dump(extras, default_flow_style=False, allow_unicode=True, sort_keys=False), nl=False)
             return
 
     click.echo(f"ideas: '{idea_id}' not found in {repo_name}", err=True)
