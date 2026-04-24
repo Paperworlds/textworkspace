@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from textworkspace.ideas import load_all_ideas, load_ideas_for_repo
 
 
@@ -119,3 +121,54 @@ def test_directory_of_md_files_placeholders(tmp_path: Path) -> None:
     assert len(ideas) == 1
     assert ideas[0].id == "sketch"
     assert ideas[0].format == "md"
+
+
+def test_append_thread_backlink_single_file(tmp_path: Path) -> None:
+    from textworkspace.ideas import append_thread_backlink
+    repo = _mkrepo(tmp_path, "w")
+    (repo / ".files" / "ideas").mkdir(parents=True)
+    src = repo / ".files" / "ideas" / "a.yaml"
+    src.write_text("title: A\nstatus: idea\n")
+    ideas = load_ideas_for_repo(repo)
+    assert len(ideas) == 1
+
+    changed = append_thread_backlink(ideas[0], "expand-a-1234")
+    assert changed is True
+    data = yaml.safe_load(src.read_text())
+    assert data["threads"] == ["expand-a-1234"]
+
+    # Idempotent: second call on the same slug returns False.
+    ideas = load_ideas_for_repo(repo)
+    again = append_thread_backlink(ideas[0], "expand-a-1234")
+    assert again is False
+
+
+def test_append_thread_backlink_aggregate_list(tmp_path: Path) -> None:
+    from textworkspace.ideas import append_thread_backlink
+    _mkrepo(tmp_path, "p", ideas_yaml=(
+        "ideas:\n"
+        "  - id: x\n    title: X\n    status: idea\n"
+        "  - id: y\n    title: Y\n    status: idea\n"
+    ))
+    repo = tmp_path / "p"
+    ideas = {i.id: i for i in load_ideas_for_repo(repo)}
+    changed = append_thread_backlink(ideas["y"], "slug-y")
+    assert changed is True
+    data = yaml.safe_load((repo / "docs" / "IDEAS.yaml").read_text())
+    y = [i for i in data["ideas"] if i.get("id") == "y"][0]
+    assert y["threads"] == ["slug-y"]
+    x = [i for i in data["ideas"] if i.get("id") == "x"][0]
+    assert "threads" not in x   # siblings untouched
+
+
+def test_append_thread_backlink_md_refuses(tmp_path: Path) -> None:
+    from textworkspace.ideas import append_thread_backlink
+    _mkrepo(tmp_path, "m", ideas_md="# ideas\n")
+    ideas = load_ideas_for_repo(tmp_path / "m")
+    changed = append_thread_backlink(ideas[0], "s")
+    assert changed is False
+
+
+def test_append_thread_backlink_yaml_import(tmp_path: Path) -> None:
+    # Bare import guard (the module uses yaml internally).
+    import yaml as _  # noqa: F401

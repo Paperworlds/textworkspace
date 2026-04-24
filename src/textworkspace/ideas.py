@@ -192,3 +192,66 @@ def load_all_ideas(source: Path | dict[str, Path]) -> list[Idea]:
     for repo in discover_repos(source):
         out.extend(load_ideas_for_repo(repo))
     return out
+
+
+def append_thread_backlink(idea: Idea, thread_slug: str) -> bool:
+    """Append *thread_slug* to the idea entry's `threads:` list in its source file.
+
+    Returns True if the file was updated, False if the slug was already there
+    or the file shape couldn't be matched safely. YAML comments are lost on
+    rewrite — that's the cost of keeping this mechanical.
+
+    Per the idea-expander spec (SPEC: idea-expander), consumers MUST write
+    the thread slug back so `tw ideas threads <repo> <id>` can locate it.
+    """
+    if idea.path.suffix in {".md", ""}:
+        return False
+
+    raw = yaml.safe_load(idea.path.read_text()) or {}
+    if not isinstance(raw, dict):
+        return False
+
+    # Case A: the whole file is the idea (per-file YAML in .files/ideas/).
+    # Detected by: no recognised container key matches AND the file's top
+    # level looks like a single idea (title/id/slug present).
+    if _looks_like_single_idea(raw):
+        threads = list(raw.get("threads") or [])
+        if thread_slug in threads:
+            return False
+        threads.append(thread_slug)
+        raw["threads"] = threads
+        idea.path.write_text(yaml.safe_dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False))
+        return True
+
+    # Case B: aggregate file with a container (ideas:, brainstorm:, etc.).
+    for key, value in raw.items():
+        if isinstance(value, list):
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                item_id = str(item.get("id") or item.get("name") or item.get("slug") or item.get("title", ""))
+                if item_id == idea.id:
+                    threads = list(item.get("threads") or [])
+                    if thread_slug in threads:
+                        return False
+                    threads.append(thread_slug)
+                    item["threads"] = threads
+                    idea.path.write_text(yaml.safe_dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False))
+                    return True
+            return False
+        if isinstance(value, dict) and all(isinstance(v, dict) for v in value.values() if v is not None):
+            item = value.get(idea.id)
+            if isinstance(item, dict):
+                threads = list(item.get("threads") or [])
+                if thread_slug in threads:
+                    return False
+                threads.append(thread_slug)
+                item["threads"] = threads
+                idea.path.write_text(yaml.safe_dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False))
+                return True
+            return False
+    return False
+
+
+def _looks_like_single_idea(data: dict) -> bool:
+    return bool(data.get("title") or data.get("id") or data.get("slug"))

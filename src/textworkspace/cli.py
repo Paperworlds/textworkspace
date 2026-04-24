@@ -1791,6 +1791,14 @@ def _ideas_dev_root() -> Path | None:
     return Path(root).expanduser() if root else None
 
 
+def _ideas_repos() -> dict[str, Path] | None:
+    """Union of dev_root + registered repos. None if neither is usable."""
+    from textworkspace.repos import iter_all_repos
+
+    repos = iter_all_repos(load_config())
+    return repos or None
+
+
 @ideas_cmd.command("list")
 @click.option("--status", "-s", default=None, help="Filter by status (idea, planned, ...).")
 @click.option("--repo", "-r", default=None, help="Filter by repo name.", shell_complete=_complete_repo_name)
@@ -2010,6 +2018,80 @@ def ideas_threads(repo_name: str, idea_id: str, status: str | None, show_all: bo
             click.echo(f"    decided: {t.meta.decision.summary}")
         click.echo(f"    view: textforums show {slug}")
         click.echo("")
+
+
+# ---------------------------------------------------------------------------
+# tw ideas expand — shell out to pp persona run idea-expander, record back-link
+# SPEC: idea-expander
+# ---------------------------------------------------------------------------
+
+
+@ideas_cmd.command("expand")
+@click.argument("repo_name", shell_complete=_complete_repo_name)
+@click.argument("idea_id", shell_complete=_complete_idea_id)
+@click.option("--model", default=None, help="Model override forwarded to pp.")
+@click.option("--dry-run", is_flag=True, help="Print the pp invocation and exit.")
+def ideas_expand(repo_name: str, idea_id: str, model: str | None, dry_run: bool) -> None:
+    """Spawn a pp worker that expands an idea into 2–3 proposals in a forum thread.
+
+    Consumer of the `idea-expander` spec owned by paperagents: shells out
+    to `pp persona run idea-expander --idea <repo>/<id>`, then records the
+    thread slug back in the idea's `threads:` list so
+    `tw ideas threads <repo> <id>` can find it.
+    """
+    import shutil
+    import subprocess
+
+    from textworkspace.forums import get_root, list_threads
+    from textworkspace.ideas import append_thread_backlink, load_ideas_for_repo
+
+    repos = _ideas_repos() or {}
+    repo_path = repos.get(repo_name)
+    if repo_path is None:
+        raise click.ClickException(f"repo '{repo_name}' not registered — try `tw repo list`")
+
+    ideas = {i.id: i for i in load_ideas_for_repo(repo_path)}
+    idea = ideas.get(idea_id)
+    if idea is None:
+        raise click.ClickException(f"idea '{idea_id}' not found in {repo_name}")
+
+    pp_bin = shutil.which("pp")
+    if pp_bin is None:
+        raise click.ClickException("pp not found on PATH — install paperagents first")
+
+    cmd = [pp_bin, "persona", "run", "idea-expander", "--idea", f"{repo_name}/{idea_id}"]
+    if model:
+        cmd += ["--model", model]
+
+    if dry_run:
+        click.echo(" ".join(cmd))
+        return
+
+    # Snapshot threads with the idea tag BEFORE the worker runs, so we can
+    # identify the (potentially new) thread it touched after it returns.
+    tag = idea_tag(repo_name, idea_id)
+    root = get_root()
+    before = {t.path.parent.name for t in list_threads(root, tag=tag)}
+
+    click.echo(f"→ {' '.join(cmd)}")
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise click.ClickException(f"pp exited {result.returncode} — thread left as-is for inspection")
+
+    after = list_threads(root, tag=tag)
+    # Prefer a brand-new thread; fall back to any open thread with the tag.
+    new_threads = [t for t in after if t.path.parent.name not in before]
+    target = new_threads[0] if new_threads else next((t for t in after if t.meta.status == "open"), None)
+    if target is None:
+        click.echo("(no thread found with the idea tag — worker may have failed silently)", err=True)
+        return
+
+    slug = target.path.parent.name
+    if append_thread_backlink(idea, slug):
+        click.echo(f"✓ back-link recorded: {idea.path} → threads: [{slug}]")
+    else:
+        click.echo(f"(back-link already present or source shape not writable: {idea.path})")
+    click.echo(f"next: textforums show {slug}")
 
 
 # ---------------------------------------------------------------------------
