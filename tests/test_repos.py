@@ -86,3 +86,23 @@ def test_missing_path_does_not_surface(tmp_path: Path) -> None:
     cfg = Config()
     cfg.repos["gone"] = RepoEntry(path=str(tmp_path / "nonexistent"))
     assert "gone" not in iter_all_repos(cfg)
+
+
+def test_filter_by_profile_keeps_matching(tmp_path: Path) -> None:
+    from textworkspace.repos import filter_by_profile
+
+    work = tmp_path / "work-a"; work.mkdir()
+    pers = tmp_path / "personal-a"; pers.mkdir()
+    no_profile = tmp_path / "scratch"; no_profile.mkdir()
+    cfg = Config()
+    register(cfg, "work-a", work, profile="work")
+    register(cfg, "personal-a", pers, profile="personal")
+    register(cfg, "scratch", no_profile)  # no profile
+
+    repos = iter_all_repos(cfg)
+    work_only = filter_by_profile(cfg, repos, "work")
+    assert set(work_only.keys()) == {"work-a"}
+    personal_only = filter_by_profile(cfg, repos, "personal")
+    assert set(personal_only.keys()) == {"personal-a"}
+    # Unknown profile → empty.
+    assert filter_by_profile(cfg, repos, "ghost") == {}

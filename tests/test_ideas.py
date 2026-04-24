@@ -85,3 +85,37 @@ def test_parse_error_surfaces_as_entry(tmp_path: Path) -> None:
     ideas = load_ideas_for_repo(tmp_path / "broken")
     assert len(ideas) == 1
     assert ideas[0].status == "error"
+
+
+def test_directory_of_per_idea_yaml(tmp_path: Path) -> None:
+    repo = _mkrepo(tmp_path, "work-repo")
+    (repo / ".files" / "ideas").mkdir(parents=True)
+    (repo / ".files" / "ideas" / "refactor-auth.yaml").write_text(
+        "title: Refactor auth\nstatus: planned\npriority: 2\nsummary: do the thing\n"
+    )
+    (repo / ".files" / "ideas" / "bundle-logs.yaml").write_text(
+        "title: Bundle logs\nstatus: idea\n"
+    )
+    ideas = sorted(load_ideas_for_repo(repo), key=lambda i: i.id)
+    assert [i.id for i in ideas] == ["bundle-logs", "refactor-auth"]
+    assert ideas[1].priority == 2
+    assert ideas[1].summary == "do the thing"
+
+
+def test_directory_and_single_file_coexist(tmp_path: Path) -> None:
+    repo = _mkrepo(tmp_path, "mixed",
+                   ideas_yaml="ideas:\n  - id: agg\n    title: Aggregate\n    status: idea\n")
+    (repo / ".files" / "ideas").mkdir(parents=True)
+    (repo / ".files" / "ideas" / "extra.yaml").write_text("title: Extra\nstatus: idea\n")
+    ideas = sorted(load_ideas_for_repo(repo), key=lambda i: i.id)
+    assert {i.id for i in ideas} == {"agg", "extra"}
+
+
+def test_directory_of_md_files_placeholders(tmp_path: Path) -> None:
+    repo = _mkrepo(tmp_path, "md-repo")
+    (repo / ".files" / "ideas").mkdir(parents=True)
+    (repo / ".files" / "ideas" / "sketch.md").write_text("# sketch\n")
+    ideas = load_ideas_for_repo(repo)
+    assert len(ideas) == 1
+    assert ideas[0].id == "sketch"
+    assert ideas[0].format == "md"

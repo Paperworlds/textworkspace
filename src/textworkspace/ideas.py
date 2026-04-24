@@ -35,7 +35,7 @@ from typing import Any, Iterable
 import yaml
 
 
-# Locations we probe, relative to each repo root. First hit wins.
+# Single-file locations we probe, relative to each repo root. First hit wins.
 _CANDIDATE_PATHS: tuple[str, ...] = (
     "docs/IDEAS.yaml",
     "docs/IDEAS.yml",
@@ -43,6 +43,14 @@ _CANDIDATE_PATHS: tuple[str, ...] = (
     "IDEAS.yml",
     "docs/IDEAS.md",
     "IDEAS.md",
+)
+
+# Directory locations we probe for repos that keep many small idea files
+# (common in work repos that can't adopt a root-level IDEAS.yaml). Every
+# *.yaml / *.yml / *.md inside becomes an idea source.
+_CANDIDATE_DIRS: tuple[str, ...] = (
+    ".files/ideas",
+    "docs/ideas",
 )
 
 
@@ -122,31 +130,54 @@ def _item_to_idea(repo_name: str, path: Path, id_hint: str | None, item: dict) -
     return Idea(repo=repo_name, path=path, id=idea_id, title=title, status=status, priority=priority, summary=summary)
 
 
-def load_ideas_for_repo(repo: Path) -> list[Idea]:
-    path = _find_ideas_file(repo)
-    if path is None:
-        return []
-
+def _load_single_file(repo_name: str, path: Path) -> list[Idea]:
     if path.suffix == ".md":
-        # Opaque: surface a single placeholder entry pointing at the file.
         return [Idea(
-            repo=repo.name,
+            repo=repo_name,
             path=path,
-            id="(markdown)",
-            title=f"{path.name} — use `tw ideas show {repo.name}` to read",
+            id=path.stem,
+            title=f"{path.name} — use `tw ideas show {repo_name} {path.stem}` to read",
             status="md",
             summary="",
         )]
-
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except Exception as exc:  # noqa: BLE001
         return [Idea(
-            repo=repo.name, path=path, id="(error)",
-            title=f"failed to parse: {exc}", status="error",
+            repo=repo_name, path=path, id="(error)",
+            title=f"failed to parse {path.name}: {exc}", status="error",
         )]
 
-    return [_item_to_idea(repo.name, path, hint, item) for hint, item in _extract_items(data)]
+    items = list(_extract_items(data))
+    if items:
+        return [_item_to_idea(repo_name, path, hint, item) for hint, item in items]
+    # Per-file YAML pattern: the whole file is one idea (common in .files/ideas/).
+    if isinstance(data, dict) and (data.get("title") or data.get("id") or data.get("slug")):
+        return [_item_to_idea(repo_name, path, path.stem, data)]
+    return []
+
+
+def load_ideas_for_repo(repo: Path) -> list[Idea]:
+    out: list[Idea] = []
+
+    # 1. Single aggregate file (IDEAS.yaml / IDEAS.md).
+    agg = _find_ideas_file(repo)
+    if agg is not None:
+        out.extend(_load_single_file(repo.name, agg))
+
+    # 2. Directory of per-idea files (.files/ideas/*.yaml etc.).
+    for rel in _CANDIDATE_DIRS:
+        d = repo / rel
+        if not d.is_dir():
+            continue
+        for child in sorted(d.iterdir()):
+            if not child.is_file():
+                continue
+            if child.suffix not in {".yaml", ".yml", ".md"}:
+                continue
+            out.extend(_load_single_file(repo.name, child))
+
+    return out
 
 
 def load_all_ideas(source: Path | dict[str, Path]) -> list[Idea]:

@@ -1330,6 +1330,7 @@ def _thread_last_activity(thread: Thread) -> str:
 
 @forums.command("inbox")
 @click.option("--repo", default=None, help="Repo to inbox for (default: infer from CWD).")
+@click.option("--profile", default=None, help="Aggregate inbox across all repos with this profile (e.g. work).")
 @click.option("--as", "as_role", default=None, help="Filter to threads addressed to this role (to=<role> or mentions includes <role>).")
 @click.option("--mark-read", is_flag=True, help="Mark all surfaced threads as read.")
 @click.option("--all", "show_all", is_flag=True, help="Show read threads too.")
@@ -1338,13 +1339,14 @@ def _thread_last_activity(thread: Thread) -> str:
               help="Include status=decided threads (default: excluded — decisions are the law, not the queue).")
 def forums_inbox(
     repo: str | None,
+    profile: str | None,
     as_role: str | None,
     mark_read: bool,
     show_all: bool,
     fmt: str,
     include_decided: bool,
 ) -> None:
-    """Per-repo inbox: threads referencing this repo, with unread state.
+    """Per-repo (or per-profile) inbox: threads referencing this repo, with unread state.
 
     A thread is 'unread' if its last activity (created or any entry) is
     newer than the repo's stored last_read timestamp. Use --mark-read to
@@ -1354,20 +1356,51 @@ def forums_inbox(
     mentioning that role. Unaddressed threads stay visible — missing
     context.to means 'any role in this repo'.
 
+    Pass --profile <tag> to aggregate across all repos sharing that
+    profile (e.g. work, personal). In profile mode unread is determined
+    per-repo — a thread is unread if it is unread for ANY participating
+    repo. --mark-read then marks all repos in the profile.
+
     --format prompt dumps each unread thread's body as a paste-ready
     block (for handoff to a new session).
     """
-    if repo is None:
-        repo = _infer_repo_from_cwd()
+    if profile and repo:
+        raise click.ClickException("--profile and --repo are mutually exclusive")
+
+    target_repos: list[str]
+    if profile:
+        from textworkspace.config import load_config
+        from textworkspace.repos import filter_by_profile
+        cfg = load_config()
+        repo_map = _all_repos_map()
+        filtered = filter_by_profile(cfg, repo_map, profile)
+        if not filtered:
+            raise click.ClickException(f"no repos with profile='{profile}'")
+        target_repos = sorted(filtered.keys())
+        display_label = f"profile={profile} ({', '.join(target_repos)})"
+    else:
         if repo is None:
-            raise click.ClickException(
-                "cannot infer repo — run from inside a known repo, or pass --repo"
-            )
+            repo = _infer_repo_from_cwd()
+            if repo is None:
+                raise click.ClickException(
+                    "cannot infer repo — run from inside a known repo, or pass --repo / --profile"
+                )
+        target_repos = [repo]
+        display_label = repo
 
     root = get_root()
-    last_read = read_last_read(repo)
+    # Per-repo last_read map so a profile inbox can flag threads unread for
+    # any constituent repo. For single-repo mode this collapses to one entry.
+    last_read_map: dict[str, str | None] = {r: read_last_read(r) for r in target_repos}
+    # 'oldest' last_read is used as the activity cutoff in profile mode —
+    # a thread newer than ANY repo's last_read is unread.
+    valid_last = [v for v in last_read_map.values() if v]
+    last_read = min(valid_last) if valid_last else None
     threads = list_threads(root)
-    relevant = [t for t in threads if repo in t.meta.context.repos]
+    relevant = [
+        t for t in threads
+        if any(r in t.meta.context.repos for r in target_repos)
+    ]
 
     # Decisions are durable records, not inbox items — use `tw forums decisions` to browse.
     if not include_decided:
@@ -1399,7 +1432,7 @@ def forums_inbox(
 
     if fmt == "prompt":
         role_part = f" (as {as_role})" if as_role else ""
-        click.echo(f"# Inbox dump — {repo}{role_part}")
+        click.echo(f"# Inbox dump — {display_label}{role_part}")
         click.echo("")
         if not unread and not pinned:
             click.echo("(nothing new)")
@@ -1446,11 +1479,12 @@ def forums_inbox(
             click.echo("")
         if mark_read:
             now = _now_iso()
-            write_last_read(repo, now)
+            for r in target_repos:
+                write_last_read(r, now)
             click.echo(f"# marked read at {now}")
         return
 
-    click.echo(f"# Inbox — {repo}")
+    click.echo(f"# Inbox — {display_label}")
     if as_role:
         click.echo(f"  role:      {as_role}")
     if last_read:
@@ -1494,26 +1528,29 @@ def forums_inbox(
                 click.echo(f"  [{t.meta.status}] {slug}  — {t.meta.title}")
             click.echo("")
 
-    # Spec brief summary (owner/follower counts) so inbox is one-stop onboarding.
-    try:
-        from textworkspace.specs import discover_specs, load_consumer_manifest
-        repo_map = _all_repos_map()
-        if repo_map:
-            specs = discover_specs(repo_map)
-            owned = sum(1 for s in specs if s.owner == repo)
-            repo_path = repo_map.get(repo)
-            follows = load_consumer_manifest(repo_path) if repo_path else None
-            following = len(follows.follows) if follows else 0
-            click.echo("## Specs")
-            click.echo(f"  owned: {owned}    following: {following}")
-            click.echo(f"  details: tw forums spec brief --repo {repo}")
-            click.echo("")
-    except Exception:  # noqa: BLE001
-        pass
+    # Spec brief summary (owner/follower counts) — single-repo mode only.
+    if not profile and len(target_repos) == 1:
+        single_repo = target_repos[0]
+        try:
+            from textworkspace.specs import discover_specs, load_consumer_manifest
+            repo_map = _all_repos_map()
+            if repo_map:
+                specs = discover_specs(repo_map)
+                owned = sum(1 for s in specs if s.owner == single_repo)
+                repo_path = repo_map.get(single_repo)
+                follows = load_consumer_manifest(repo_path) if repo_path else None
+                following = len(follows.follows) if follows else 0
+                click.echo("## Specs")
+                click.echo(f"  owned: {owned}    following: {following}")
+                click.echo(f"  details: tw forums spec brief --repo {single_repo}")
+                click.echo("")
+        except Exception:  # noqa: BLE001
+            pass
 
     if mark_read:
         now = _now_iso()
-        write_last_read(repo, now)
+        for r in target_repos:
+            write_last_read(r, now)
         click.echo(f"marked read at {now}")
 
 

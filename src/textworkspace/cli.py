@@ -1434,15 +1434,28 @@ def repo_add(name: str, path: str, profile: str, label: str) -> None:
 
 
 @repo_cmd.command("list")
-def repo_list() -> None:
+@click.option("--profile", default=None, help="Filter to repos with this profile (e.g. work, personal).")
+def repo_list(profile: str | None) -> None:
     """List all repos — dev_root scan + registered entries."""
-    from textworkspace.repos import iter_all_repos, _registered_repos, _scan_dev_root, _dev_root_path
+    from textworkspace.repos import (
+        iter_all_repos,
+        _registered_repos,
+        _scan_dev_root,
+        _dev_root_path,
+        filter_by_profile,
+    )
 
     cfg = load_config()
     dev_root = _dev_root_path(cfg)
     scanned = _scan_dev_root(dev_root)
     registered = _registered_repos(cfg)
     merged = iter_all_repos(cfg)
+
+    if profile:
+        merged = filter_by_profile(cfg, merged, profile)
+        if not merged:
+            click.echo(f"No repos with profile='{profile}'.")
+            return
 
     if not merged:
         click.echo("No repos found. Set dev_root (tw dev on <path>) or register one (tw repo add <name> <path>).")
@@ -1453,8 +1466,8 @@ def repo_list() -> None:
         path = merged[name]
         if name in registered:
             origin = "registered"
-            profile = (cfg.repos[name].profile or "")
-            extra = f" (profile: {profile})" if profile else ""
+            p = (cfg.repos[name].profile or "")
+            extra = f" (profile: {p})" if p else ""
         elif name in scanned:
             origin = "dev_root"
             extra = ""
@@ -1752,16 +1765,24 @@ def _ideas_repos() -> dict[str, Path] | None:
 @ideas_cmd.command("list")
 @click.option("--status", "-s", default=None, help="Filter by status (idea, planned, ...).")
 @click.option("--repo", "-r", default=None, help="Filter by repo name.")
+@click.option("--profile", default=None, help="Filter repos by profile (e.g. work, personal).")
 @click.option("--query", "-q", default=None, help="Substring match on id/title/summary.")
 @click.option("--md/--no-md", default=True, show_default=True, help="Include IDEAS.md placeholders.")
-def ideas_list(status: str | None, repo: str | None, query: str | None, md: bool) -> None:
+def ideas_list(status: str | None, repo: str | None, profile: str | None, query: str | None, md: bool) -> None:
     """List ideas across all repos under dev_root."""
     from textworkspace.ideas import load_all_ideas
+    from textworkspace.repos import filter_by_profile
 
     repos = _ideas_repos()
     if repos is None:
         click.echo("ideas: no repos found — set dev_root or register with `tw repo add`", err=True)
         raise SystemExit(1)
+
+    if profile:
+        repos = filter_by_profile(load_config(), repos, profile)
+        if not repos:
+            click.echo(f"ideas: no repos with profile='{profile}'")
+            return
 
     ideas = load_all_ideas(repos)
 

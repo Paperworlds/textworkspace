@@ -56,6 +56,25 @@ def iter_all_repos(cfg: Config) -> dict[str, Path]:
     return merged
 
 
+def profiles(cfg: Config) -> dict[str, str]:
+    """Return {repo_name: profile} for every repo registered in config.repos.
+
+    Repos discovered via dev_root scan alone have no profile — callers should
+    treat missing entries as unprofiled.
+    """
+    return {name: (entry.profile or "") for name, entry in (cfg.repos or {}).items()}
+
+
+def filter_by_profile(cfg: Config, repos: dict[str, Path], profile: str) -> dict[str, Path]:
+    """Keep only entries whose registered profile matches *profile*.
+
+    An unregistered or unprofiled repo is dropped — the filter is strict so
+    that `--profile work` never surprises with personal repos leaking in.
+    """
+    p = profiles(cfg)
+    return {name: path for name, path in repos.items() if p.get(name) == profile}
+
+
 def resolve_repo(cfg: Config, name: str) -> Path | None:
     """Return the path for *name* using iter_all_repos, or None."""
     return iter_all_repos(cfg).get(name)
