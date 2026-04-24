@@ -130,6 +130,20 @@ tw forums decisions supersede <old> <new>      # ADR-history pattern
 Once decided, the thread is frozen (title + decision fields) and drops
 out of inbox by default — decisions are the law, not the queue.
 
+**Decisions → textmap** — promote decided threads into a queryable graph:
+
+```bash
+tw forums decisions export              # write decision-<slug>.md files
+tw forums decisions ingest              # export + `textmap ingest` in one
+```
+
+Each decided thread becomes a `decision` node in textmap; `superseded-by`
+chains become `replaces` edges (direction inverted to match textmap
+convention, OLD marked `deprecated`), `context.repos` become `applies_to`
+edges, `context.spec` becomes an `implements` edge, tags + repos become
+labels. The forum stays the source of truth — export is a full rewrite,
+stale files are pruned.
+
 **Inbox** — per-repo mailbox with unread state, one-stop agent onboarding:
 
 ```bash
@@ -274,10 +288,11 @@ string so `tw doctor` can detect stale installs without re-running.
 
 ## Roadmap
 
-- [ ] `tw ideas expand <repo> <id>` — run a pp worker that opens a thread
-      with 2–3 proposals for an idea (coordination thread already open with paperagents)
-- [ ] Native textforums → textmap ingestion: `status=decided` threads become
-      Decision nodes; `superseded-by` links become edges
+- [ ] `tw ideas expand <repo> <id>` — spawn a pp worker that opens a thread
+      with 2–3 proposals for an idea (coordination thread decided; paperagents
+      side has a draft `idea-expander` persona spec)
+- [ ] Live forums → textmap dual-write on `decide` / `supersede` (today:
+      batch via `tw forums decisions ingest`)
 - [ ] Extract `textforums` into its own repo (current home: inside textworkspace)
 - [ ] Publish to PyPI
 - [ ] `tw forums decisions import` — pull paper ADRs from any repo that ships them
