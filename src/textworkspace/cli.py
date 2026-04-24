@@ -1527,6 +1527,60 @@ def repo_remove(name: str) -> None:
     click.echo(f"unregistered '{name}' (files untouched)")
 
 
+@repo_cmd.command("rename")
+@click.argument("old", shell_complete=_complete_repo_name)
+@click.argument("new")
+@click.option("--dry-run", is_flag=True, help="Show the plan without writing.")
+@click.option("--force", is_flag=True, help="Skip the confirmation prompt.")
+def repo_rename(old: str, new: str, dry_run: bool, force: bool) -> None:
+    """Rename a repo's identity — config + forum threads + idea tags.
+
+    Complement to `tw repo move` (which handles folder-path changes).
+    Rewrites:
+      - config.yaml: repos.<old> key → repos.<new>
+      - every ~/.textforums/*/thread.yaml: context.repos membership + tags
+        matching `idea:<old>/*` (the idea back-link convention)
+      - clears the decision export cache so the next
+        `tw forums decisions ingest` emits fresh files with the new name
+
+    Out of scope (handle in the source repo):
+      - filesystem folder rename (use `tw repo move` after, or `mv` first)
+      - pyproject.toml, spec frontmatter, README
+      - git remote URL + GitHub repo rename
+      - textmap graph.yaml content (re-run `tw forums decisions ingest`)
+    """
+    from textworkspace.forums import get_root
+    from textworkspace.rename_sweep import apply_plan, format_plan, plan_rename
+    from textworkspace.textmap_export import DEFAULT_EXPORT_DIR
+
+    if old == new:
+        raise click.ClickException("old and new must differ")
+
+    cfg = load_config()
+    forums_root = get_root()
+    plan = plan_rename(cfg, forums_root, old, new, decision_export_dir=DEFAULT_EXPORT_DIR)
+    click.echo(format_plan(plan))
+
+    if plan.total_changes == 0 and plan.decision_export_dir is None:
+        return
+
+    if dry_run:
+        click.echo("\n(dry-run — nothing written)")
+        return
+
+    if not force and not click.confirm("\nApply these changes?"):
+        click.echo("aborted")
+        return
+
+    apply_plan(plan, cfg, forums_root)
+    save_config(cfg)
+    click.echo(f"\n✓ renamed {old} → {new}")
+    click.echo("Next steps in the source repo (not automated here):")
+    click.echo(f"  - rename folder on disk (then `tw repo move {new} <new-path>` if it moves)")
+    click.echo(f"  - update pyproject.toml / spec frontmatter / git remote inside the repo")
+    click.echo(f"  - re-ingest textmap: `tw forums decisions ingest`")
+
+
 @repo_cmd.command("move")
 @click.argument("name", shell_complete=_complete_repo_name)
 @click.argument("new_path")
