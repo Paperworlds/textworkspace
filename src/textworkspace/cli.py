@@ -1954,6 +1954,65 @@ def ideas_quickstart() -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw ideas threads — find textforums threads linked to an idea via convention
+# ---------------------------------------------------------------------------
+
+_IDEA_TAG_PREFIX = "idea:"
+
+
+def idea_tag(repo: str, idea_id: str) -> str:
+    """Canonical tag linking a thread to an idea: 'idea:<repo>/<id>'."""
+    return f"{_IDEA_TAG_PREFIX}{repo}/{idea_id}"
+
+
+@ideas_cmd.command("threads")
+@click.argument("repo_name", shell_complete=_complete_repo_name)
+@click.argument("idea_id", shell_complete=_complete_idea_id)
+@click.option("--status", default=None, help="Filter by thread status (open / resolved / decided).")
+@click.option("--all", "show_all", is_flag=True, help="Include resolved and decided threads.")
+def ideas_threads(repo_name: str, idea_id: str, status: str | None, show_all: bool) -> None:
+    """List textforums threads tagged for this idea.
+
+    Convention: threads discussing idea <id> in repo <repo> carry the tag
+    'idea:<repo>/<id>'. Anything opened via `tw ideas expand` (or by hand
+    with that tag) shows up here.
+    """
+    from textworkspace.forums import get_root, list_threads
+    from datetime import datetime, timezone
+
+    tag = idea_tag(repo_name, idea_id)
+    root = get_root()
+    threads = list_threads(root, tag=tag)
+    if status:
+        threads = [t for t in threads if t.meta.status == status]
+    elif not show_all:
+        threads = [t for t in threads if t.meta.status == "open"]
+
+    click.echo(f"# Threads for idea {repo_name}/{idea_id}  (tag: {tag})")
+    click.echo("")
+    if not threads:
+        click.echo("  (none — open one with:")
+        click.echo(f"     textforums new --title \"expand: <title>\" --repo {repo_name} \\")
+        click.echo(f"         --tag {tag} --pin)")
+        return
+
+    now = datetime.now(timezone.utc)
+    for t in threads:
+        slug = t.path.parent.name
+        try:
+            created = datetime.fromisoformat(t.meta.created.replace("Z", "+00:00"))
+            age = f"{(now - created).days}d"
+        except Exception:  # noqa: BLE001
+            age = "?"
+        click.echo(f"  [{t.meta.status:<8}] {slug}  ({age}, {len(t.entries)} entr{'y' if len(t.entries) == 1 else 'ies'})")
+        click.echo(f"    {t.meta.title}")
+        if t.meta.status == "decided" and t.meta.decision is not None:
+            click.echo(f"    decided: {t.meta.decision.summary}")
+        click.echo(f"    view: textforums show {slug}")
+        click.echo("")
+
+
+# ---------------------------------------------------------------------------
 # tw up / tw down — bring the whole MCP fleet up or down via textserve
 # ---------------------------------------------------------------------------
 
