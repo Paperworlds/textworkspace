@@ -99,14 +99,25 @@ class ThreadContext:
 
 
 @dataclass
+class Decision:
+    """Canonical ADR-lite record. Fields are frozen when status=decided."""
+    summary: str
+    decided_at: str       # ISO date (YYYY-MM-DD)
+    decided_by: str
+
+
+@dataclass
 class ThreadMeta:
     title: str
     created: str           # ISO 8601
     author: str
     tags: list[str] = field(default_factory=list)
-    status: str = "open"
+    status: str = "open"   # "open" | "resolved" | "decided"
     links: list[ThreadLink] = field(default_factory=list)
     context: ThreadContext = field(default_factory=ThreadContext)
+    priority: str = "normal"      # "high" | "normal" | "low"
+    pinned_until: str = ""        # ISO date; empty = no expiry
+    decision: Decision | None = None
 
 
 @dataclass
@@ -195,6 +206,16 @@ def _meta_to_dict(meta: ThreadMeta) -> dict:
         d["links"] = [{"rel": lnk.rel, "slug": lnk.slug, "note": lnk.note} for lnk in meta.links]
     if not meta.context.is_empty():
         d["context"] = _context_to_dict(meta.context)
+    if meta.priority and meta.priority != "normal":
+        d["priority"] = meta.priority
+    if meta.pinned_until:
+        d["pinned_until"] = meta.pinned_until
+    if meta.decision is not None:
+        d["decision"] = {
+            "summary": meta.decision.summary,
+            "decided_at": meta.decision.decided_at,
+            "decided_by": meta.decision.decided_by,
+        }
     return d
 
 
@@ -214,6 +235,14 @@ def _parse_meta(data: dict) -> ThreadMeta:
         ThreadLink(rel=lnk["rel"], slug=lnk["slug"], note=lnk.get("note", ""))
         for lnk in raw_links
     ]
+    decision = None
+    raw_decision = data.get("decision")
+    if isinstance(raw_decision, dict) and raw_decision.get("summary"):
+        decision = Decision(
+            summary=str(raw_decision.get("summary", "")),
+            decided_at=str(raw_decision.get("decided_at", "")),
+            decided_by=str(raw_decision.get("decided_by", "")),
+        )
     return ThreadMeta(
         title=data["title"],
         created=data["created"],
@@ -222,6 +251,9 @@ def _parse_meta(data: dict) -> ThreadMeta:
         status=data.get("status", "open"),
         links=links,
         context=_parse_context(data.get("context")),
+        priority=str(data.get("priority") or "normal"),
+        pinned_until=str(data.get("pinned_until") or ""),
+        decision=decision,
     )
 
 
@@ -422,6 +454,26 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _today_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def is_effectively_pinned(meta: ThreadMeta, today: str | None = None) -> bool:
+    """Return True if thread should appear as pinned.
+
+    priority=high is always pinned (until explicitly unpinned or expired).
+    pinned_until in the future is also pinned. Past pinned_until is ignored
+    in memory (we don't rewrite the file).
+    """
+    today = today or _today_iso()
+    if meta.pinned_until:
+        # An explicit expiry date: honoured only if not yet past.
+        if meta.pinned_until >= today:
+            return True
+        return False
+    return meta.priority == "high"
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -497,6 +549,8 @@ def forums_list(status: str | None, tag: str | None, repo: str | None, spec: str
 @click.option("--spec", default=None, help="Context: spec slug this thread discusses.")
 @click.option("--to", "to", default=None, help="Address the thread to a role (e.g. reviewer, deployer).")
 @click.option("--mention", "mentions", multiple=True, help="Copy another role (repeatable).")
+@click.option("--pin", is_flag=True, default=False, help="Pin the thread (priority=high).")
+@click.option("--until", "until", default=None, help="Auto-expire date for the pin (YYYY-MM-DD).")
 def forums_new(
     title: str,
     tags: tuple[str, ...],
@@ -508,6 +562,8 @@ def forums_new(
     spec: str | None,
     to: str | None,
     mentions: tuple[str, ...],
+    pin: bool,
+    until: str | None,
 ) -> None:
     """Create a new thread, optionally with a first entry."""
     root = get_root()
@@ -527,6 +583,9 @@ def forums_new(
         mentions=list(mentions),
     )
     meta = ThreadMeta(title=title, created=now, author=author, tags=list(tags), context=ctx)
+    if pin or until:
+        meta.priority = "high"
+        meta.pinned_until = until or ""
     thread = Thread(meta=meta, entries=[], path=thread_dir / _THREAD_FILE)
 
     if content is None:
@@ -574,6 +633,10 @@ def forums_show(slug: str, raw: bool) -> None:
     click.echo(f"Title:   {m.title}")
     click.echo(f"Slug:    {slug}")
     click.echo(f"Status:  {m.status}")
+    if m.priority and m.priority != "normal":
+        click.echo(f"Priority: {m.priority}")
+    if m.pinned_until:
+        click.echo(f"Pinned until: {m.pinned_until}")
     click.echo(f"Author:  {m.author}")
     click.echo(f"Created: {m.created}")
     if m.tags:
@@ -597,6 +660,12 @@ def forums_show(slug: str, raw: bool) -> None:
         for lnk in m.links:
             note_str = f"  ({lnk.note})" if lnk.note else ""
             click.echo(f"  {lnk.rel} → {lnk.slug}{note_str}")
+    if m.status == "decided" and m.decision is not None:
+        click.echo("")
+        click.echo("Decision:")
+        click.echo(f"  summary:    {m.decision.summary}")
+        click.echo(f"  decided_at: {m.decision.decided_at}")
+        click.echo(f"  decided_by: {m.decision.decided_by}")
     click.echo(f"\n{len(thread.entries)} entr{'y' if len(thread.entries) == 1 else 'ies'}:")
     for i, e in enumerate(thread.entries, 1):
         click.echo(f"\n--- [{i}] {e.author} @ {e.timestamp} ---")
@@ -662,6 +731,9 @@ def forums_close(slug: str, content: str | None, author: str | None) -> None:
         raise click.ClickException(f"Thread '{slug}' not found.")
 
     thread.meta.status = "resolved"
+    # Closing auto-unpins: a resolved thread shouldn't keep occupying the pinned slot.
+    thread.meta.priority = "normal"
+    thread.meta.pinned_until = ""
     if content:
         author = get_author(author)
         entry = Entry(author=author, timestamp=_now_iso(), status="resolved", content=content)
@@ -716,6 +788,95 @@ def forums_bulk_close(status: str | None, tag: str | None, content: str | None, 
 
 
 # ---------------------------------------------------------------------------
+# forums pin / unpin
+# ---------------------------------------------------------------------------
+
+@forums.command("pin")
+@click.argument("slug")
+@click.option("--until", "until", default=None, help="Auto-expire date (YYYY-MM-DD). Empty = no expiry.")
+@click.option("--priority", type=click.Choice(["high", "normal", "low"]), default="high",
+              show_default=True, help="Priority to set (default: high).")
+def forums_pin(slug: str, until: str | None, priority: str) -> None:
+    """Mark a thread as urgent — surfaces in inbox Pinned section."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+    thread.meta.priority = priority
+    thread.meta.pinned_until = until or ""
+    save_thread(thread)
+    bits = [f"priority={priority}"]
+    if until:
+        bits.append(f"until={until}")
+    click.echo(f"Pinned '{slug}' ({', '.join(bits)}).")
+
+
+@forums.command("unpin")
+@click.argument("slug")
+def forums_unpin(slug: str) -> None:
+    """Clear pin fields on a thread (priority → normal, pinned_until cleared)."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+    thread.meta.priority = "normal"
+    thread.meta.pinned_until = ""
+    save_thread(thread)
+    click.echo(f"Unpinned '{slug}'.")
+
+
+# ---------------------------------------------------------------------------
+# forums decide — promote a thread to a canonical decision (ADR-lite)
+# ---------------------------------------------------------------------------
+
+@forums.command("decide")
+@click.argument("slug")
+@click.option("--summary", required=True, help="Canonical one-line decision summary.")
+@click.option("--author", "-a", default=None, help="Author of the decision.")
+@click.option("--force", is_flag=True, default=False, help="Allow overwriting an existing decision.")
+def forums_decide(slug: str, summary: str, author: str | None, force: bool) -> None:
+    """Mark a thread as decided — frozen, canonical, durable.
+
+    Stamps decided_at=today and decided_by=author, appends a final entry
+    "Decision: <summary>". After this, meta.title and decision.* are frozen.
+    """
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+
+    if thread.meta.status == "decided" and not force:
+        raise click.ClickException(
+            f"'{slug}' is already decided. Re-decide with --force, or `reopen --force` first."
+        )
+
+    author_name = get_author(author)
+    today = _today_iso()
+    thread.meta.decision = Decision(
+        summary=summary,
+        decided_at=today,
+        decided_by=author_name,
+    )
+    thread.meta.status = "decided"
+    # A decided thread no longer needs urgency — clear pin fields.
+    thread.meta.priority = "normal"
+    thread.meta.pinned_until = ""
+
+    entry = Entry(
+        author=author_name,
+        timestamp=_now_iso(),
+        status="decided",
+        content=f"Decision: {summary}",
+    )
+    thread.entries.append(entry)
+    save_thread(thread)
+    click.echo(f"Decided '{slug}': {summary}")
+
+
+# ---------------------------------------------------------------------------
 # forums edit
 # ---------------------------------------------------------------------------
 
@@ -761,13 +922,31 @@ def forums_edit_entry(slug: str, index: int, content: str | None, status: str | 
 
 @forums.command("reopen")
 @click.argument("slug")
-def forums_reopen(slug: str) -> None:
-    """Set a thread's status back to 'open'."""
+@click.option("--force", is_flag=True, default=False, help="Required to reopen a decided thread.")
+def forums_reopen(slug: str, force: bool) -> None:
+    """Set a thread's status back to 'open'.
+
+    Decided threads are canonical — reopening them requires --force and
+    emits a loud warning. Doing so does NOT automatically unlock the
+    decision block; it just flips status so new entries can resume.
+    """
     root = get_root()
     try:
         thread = load_thread(root, slug)
     except FileNotFoundError:
         raise click.ClickException(f"Thread '{slug}' not found.")
+
+    if thread.meta.status == "decided" and not force:
+        raise click.ClickException(
+            f"'{slug}' is decided. Reopening a decision is rare — pass --force if you mean it."
+        )
+
+    if thread.meta.status == "decided":
+        click.echo(
+            f"WARNING: reopening decided thread '{slug}'. Decision record is preserved "
+            f"(summary/decided_at/decided_by) but status is now 'open'.",
+            err=True,
+        )
 
     thread.meta.status = "open"
     save_thread(thread)
@@ -1034,6 +1213,39 @@ Cross-repo contracts (API surfaces, protocols, config formats) ship as specs:
 
 See `tw forums example` for a guided lifecycle walkthrough.
 
+## Pins and Decisions
+
+Two lightweight layers of urgency / permanence on top of threads:
+
+  Pins       — "this matters right now"
+  Decisions  — "this is the law, don't relitigate"
+
+When to PIN: a thread is blocking, time-sensitive, or you want the next
+session to see it above everything else.
+
+  textforums pin <slug>                    # surface in inbox ## Pinned
+  textforums pin <slug> --until 2026-05-30 # auto-expire (YYYY-MM-DD)
+  textforums unpin <slug>
+  textforums new --pin --title "..." ...   # convenience
+
+Pins expire silently once `pinned_until` is past. Closing a thread
+auto-unpins. `--format prompt` renders pinned entries first with a
+`[PINNED]` prefix.
+
+When to DECIDE: a discussion concluded with a per-repo rule or choice
+you want to cite later. Decisions are ADR-lite — durable but cheap.
+Heavier cross-repo contracts go in a spec instead.
+
+  textforums decide <slug> --summary "Use protobuf for the wire format."
+  tw forums decisions list [--repo X] [--query T] [--since YYYY-MM-DD]
+  tw forums decisions show <slug>
+  tw forums decisions supersede <old> <new>   # ADR-history pattern
+  textforums reopen <slug> --force             # rare — decisions are frozen
+
+Once decided: meta.title and decision.* are frozen. The thread drops
+out of `tw forums inbox` (use `--include-decided` to include). Before
+opening a new thread on a settled question, grep `tw forums decisions`.
+
 ## Rule of thumb for agents
 
 1. Start a session → `tw forums inbox`.
@@ -1122,7 +1334,16 @@ def _thread_last_activity(thread: Thread) -> str:
 @click.option("--mark-read", is_flag=True, help="Mark all surfaced threads as read.")
 @click.option("--all", "show_all", is_flag=True, help="Show read threads too.")
 @click.option("--format", "fmt", type=click.Choice(["table", "prompt"]), default="table", help="Output format.")
-def forums_inbox(repo: str | None, as_role: str | None, mark_read: bool, show_all: bool, fmt: str) -> None:
+@click.option("--include-decided", is_flag=True, default=False,
+              help="Include status=decided threads (default: excluded — decisions are the law, not the queue).")
+def forums_inbox(
+    repo: str | None,
+    as_role: str | None,
+    mark_read: bool,
+    show_all: bool,
+    fmt: str,
+    include_decided: bool,
+) -> None:
     """Per-repo inbox: threads referencing this repo, with unread state.
 
     A thread is 'unread' if its last activity (created or any entry) is
@@ -1148,6 +1369,10 @@ def forums_inbox(repo: str | None, as_role: str | None, mark_read: bool, show_al
     threads = list_threads(root)
     relevant = [t for t in threads if repo in t.meta.context.repos]
 
+    # Decisions are durable records, not inbox items — use `tw forums decisions` to browse.
+    if not include_decided:
+        relevant = [t for t in relevant if t.meta.status != "decided"]
+
     if as_role:
         relevant = [
             t for t in relevant
@@ -1156,9 +1381,16 @@ def forums_inbox(repo: str | None, as_role: str | None, mark_read: bool, show_al
             or as_role in t.meta.context.mentions
         ]
 
+    today = _today_iso()
+    pinned: list[Thread] = [t for t in relevant if is_effectively_pinned(t.meta, today)]
+    pinned_slugs = {t.path.parent.name for t in pinned}
+
     unread: list[tuple[Thread, str]] = []
     read_threads: list[Thread] = []
     for t in relevant:
+        if t.path.parent.name in pinned_slugs:
+            # Pinned threads render only in the Pinned section, not Unread.
+            continue
         activity = _thread_last_activity(t)
         if last_read is None or activity > last_read:
             unread.append((t, activity))
@@ -1169,8 +1401,29 @@ def forums_inbox(repo: str | None, as_role: str | None, mark_read: bool, show_al
         role_part = f" (as {as_role})" if as_role else ""
         click.echo(f"# Inbox dump — {repo}{role_part}")
         click.echo("")
-        if not unread:
+        if not unread and not pinned:
             click.echo("(nothing new)")
+        # Pinned render first with a [PINNED] prefix.
+        for t in pinned:
+            slug = t.path.parent.name
+            click.echo(f"## [PINNED] {t.meta.title}  [{slug}]")
+            ctx = t.meta.context
+            meta_bits = []
+            if t.meta.pinned_until:
+                meta_bits.append(f"until={t.meta.pinned_until}")
+            if ctx.to:
+                meta_bits.append(f"to={ctx.to}")
+            if ctx.spec:
+                meta_bits.append(f"spec={ctx.spec}")
+            if meta_bits:
+                click.echo("  " + "  ".join(meta_bits))
+            click.echo("")
+            for e in t.entries:
+                click.echo(f"--- {e.author} @ {e.timestamp} ---")
+                click.echo(e.content)
+                click.echo("")
+            click.echo(f"(reply with: textforums add {slug} --content \"...\")")
+            click.echo("")
         for t, _ in sorted(unread, key=lambda x: x[1], reverse=True):
             slug = t.path.parent.name
             click.echo(f"## {t.meta.title}  [{slug}]")
@@ -1206,9 +1459,20 @@ def forums_inbox(repo: str | None, as_role: str | None, mark_read: bool, show_al
         click.echo("  last read: (never)")
     click.echo("")
 
-    if not unread and not show_all:
+    if not unread and not pinned and not show_all:
         click.echo("  (nothing new)")
     else:
+        if pinned:
+            click.echo("## Pinned")
+            for t in pinned:
+                slug = t.path.parent.name
+                until_bit = f" (until {t.meta.pinned_until})" if t.meta.pinned_until else ""
+                to_bit = f"  → {t.meta.context.to}" if t.meta.context.to else ""
+                click.echo(f"  [{t.meta.status}] {slug}{until_bit}{to_bit}")
+                click.echo(f"    {t.meta.title}")
+                click.echo(f"    reply: textforums add {slug} --content \"...\"")
+                click.echo(f"    view:  textforums show {slug}")
+                click.echo("")
         if unread:
             click.echo("## Unread")
             for t, activity in sorted(unread, key=lambda x: x[1], reverse=True):
@@ -1735,3 +1999,145 @@ def spec_supersede(old_slug: str, new_slug: str) -> None:
 
     click.echo(f"{old_slug} → superseded")
     click.echo(f"{new_slug} → adopted (supersedes {old_slug})")
+
+
+# ---------------------------------------------------------------------------
+# forums decisions — browse the law
+# ---------------------------------------------------------------------------
+
+
+@forums.group("decisions")
+def forums_decisions() -> None:
+    """Browse decided threads — the per-repo canonical decisions (ADR-lite).
+
+    Decisions are threads with `status=decided`. They are durable, cheap,
+    and findable. For heavier cross-repo contracts use `tw forums spec`.
+    """
+
+
+def _is_superseded(thread: Thread) -> bool:
+    return any(lnk.rel == "superseded-by" for lnk in thread.meta.links)
+
+
+@forums_decisions.command("list")
+@click.option("--repo", default=None, help="Filter by context.repos membership.")
+@click.option("--query", default=None, help="Substring match against title or decision summary.")
+@click.option("--owner", default=None, help="Filter by decided_by.")
+@click.option("--since", default=None, help="Only decisions decided on/after this ISO date.")
+@click.option("--all", "show_all", is_flag=True, help="Include superseded decisions.")
+def decisions_list(
+    repo: str | None,
+    query: str | None,
+    owner: str | None,
+    since: str | None,
+    show_all: bool,
+) -> None:
+    """List decided threads."""
+    root = get_root()
+    threads = list_threads(root, status="decided")
+
+    if repo:
+        threads = [t for t in threads if repo in t.meta.context.repos]
+    if owner:
+        threads = [t for t in threads if t.meta.decision and t.meta.decision.decided_by == owner]
+    if since:
+        threads = [
+            t for t in threads
+            if t.meta.decision and t.meta.decision.decided_at and t.meta.decision.decided_at >= since
+        ]
+    if query:
+        q = query.lower()
+        threads = [
+            t for t in threads
+            if q in t.meta.title.lower()
+            or (t.meta.decision and q in t.meta.decision.summary.lower())
+        ]
+    if not show_all:
+        threads = [t for t in threads if not _is_superseded(t)]
+
+    if not threads:
+        click.echo("No decisions found.")
+        return
+
+    for t in threads:
+        slug = t.path.parent.name
+        d = t.meta.decision
+        tag_superseded = "  (superseded)" if _is_superseded(t) else ""
+        repos = ",".join(t.meta.context.repos) or "-"
+        if d:
+            click.echo(f"  {d.decided_at}  {slug}  [{repos}]{tag_superseded}")
+            click.echo(f"      {d.summary}")
+            click.echo(f"      decided_by: {d.decided_by}")
+        else:
+            click.echo(f"  (no decision block)  {slug}  [{repos}]")
+
+
+@forums_decisions.command("show")
+@click.argument("slug")
+def decisions_show(slug: str) -> None:
+    """Render a decision's block and body compactly."""
+    root = get_root()
+    try:
+        thread = load_thread(root, slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{slug}' not found.")
+    if thread.meta.status != "decided":
+        click.echo(f"Warning: '{slug}' is not decided (status={thread.meta.status}).", err=True)
+
+    click.echo(f"Title:    {thread.meta.title}")
+    click.echo(f"Slug:     {slug}")
+    click.echo(f"Status:   {thread.meta.status}")
+    if thread.meta.context.repos:
+        click.echo(f"Repos:    {', '.join(thread.meta.context.repos)}")
+    d = thread.meta.decision
+    if d:
+        click.echo("")
+        click.echo("Decision:")
+        click.echo(f"  summary:    {d.summary}")
+        click.echo(f"  decided_at: {d.decided_at}")
+        click.echo(f"  decided_by: {d.decided_by}")
+    if thread.meta.links:
+        click.echo("")
+        click.echo("Links:")
+        for lnk in thread.meta.links:
+            note = f"  ({lnk.note})" if lnk.note else ""
+            click.echo(f"  {lnk.rel} → {lnk.slug}{note}")
+    click.echo("")
+    click.echo(f"{len(thread.entries)} entr{'y' if len(thread.entries) == 1 else 'ies'}:")
+    for i, e in enumerate(thread.entries, 1):
+        click.echo(f"\n--- [{i}] {e.author} @ {e.timestamp} ---")
+        if e.status:
+            click.echo(f"Status: {e.status}")
+        click.echo(e.content)
+
+
+@forums_decisions.command("supersede")
+@click.argument("old_slug")
+@click.argument("new_slug")
+def decisions_supersede(old_slug: str, new_slug: str) -> None:
+    """Add a `superseded-by` link from OLD_SLUG to NEW_SLUG.
+
+    Both threads keep status=decided — ADR-history pattern. Does NOT unlock
+    frozen fields on either side.
+    """
+    root = get_root()
+    try:
+        old = load_thread(root, old_slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{old_slug}' not found.")
+    try:
+        new = load_thread(root, new_slug)
+    except FileNotFoundError:
+        raise click.ClickException(f"Thread '{new_slug}' not found.")
+
+    if old.meta.status != "decided" or new.meta.status != "decided":
+        raise click.ClickException("Both threads must already be decided.")
+
+    # Duplicate guard
+    for lnk in old.meta.links:
+        if lnk.rel == "superseded-by" and lnk.slug == new_slug:
+            raise click.ClickException(f"'{old_slug}' is already superseded-by '{new_slug}'.")
+
+    old.meta.links.append(ThreadLink(rel="superseded-by", slug=new_slug))
+    save_thread(old)
+    click.echo(f"{old_slug} → superseded-by → {new_slug}")

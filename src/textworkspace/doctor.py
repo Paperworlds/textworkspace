@@ -423,6 +423,30 @@ def run_doctor_checks() -> list[CheckResult]:
     except Exception:  # noqa: BLE001
         pass
 
+    # --- Decisions: flag status=decided threads missing summary or decided_at ---
+    try:
+        from textworkspace.forums import get_root as _forums_root, list_threads as _list_threads
+        _threads = _list_threads(_forums_root(), status="decided")
+        for t in _threads:
+            slug = t.path.parent.name
+            d = t.meta.decision
+            if d is None or not d.summary:
+                results.append(CheckResult(
+                    label=f"decision:{slug}",
+                    detail="decided thread missing decision summary",
+                    status="warn",
+                    fix=f"textforums decide {slug} --summary ...",
+                ))
+            elif not d.decided_at:
+                results.append(CheckResult(
+                    label=f"decision:{slug}",
+                    detail="decided thread missing decided_at date",
+                    status="warn",
+                    fix="edit thread.yaml and set decision.decided_at",
+                ))
+    except Exception:  # noqa: BLE001
+        pass
+
     return results
 
 

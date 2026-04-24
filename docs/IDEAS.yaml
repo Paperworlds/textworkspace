@@ -1094,6 +1094,19 @@ textmap_population:
         Completes the Intent→Tool edge by adding which MCP server handles it.
         Small file, direct import.
 
+    - source: ~/.textforums/*/thread.yaml (status=decided)
+      type: structured YAML
+      produces: Decision nodes (per-repo ADR-lite)
+      priority: 2
+      why: >
+        textforums threads promoted via `textforums decide` are canonical
+        per-repo decisions — summary, decided_at, decided_by, plus the
+        discussion body. They fit the decision type directly. context.repos
+        gives the `applies_to` edges; `superseded-by` links produce
+        supersedes edges in the graph. Ingest only status=decided to
+        avoid churn from in-flight threads. Added 2026-04-24 with
+        textworkspace 0.11.0.
+
     - source: skills/rules/*.mdc
       type: semi-structured Markdown with YAML frontmatter
       produces: Protocol nodes

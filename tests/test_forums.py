@@ -9,6 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from textworkspace.forums import (
+    Decision,
     Entry,
     Thread,
     ThreadLink,
@@ -98,6 +99,51 @@ def test_save_and_load_round_trip(tmp_path):
     assert len(loaded.entries) == 1
     assert loaded.entries[0].content == "Hello, world!"
     assert loaded.entries[0].author == "alice"
+
+
+def test_roundtrip_pins_and_decision(tmp_path):
+    """New fields: priority, pinned_until, decision — roundtrip and defaults are not serialised."""
+    thread = _make_thread(tmp_path, slug="pinned-decided")
+    thread.meta.priority = "high"
+    thread.meta.pinned_until = "2026-12-31"
+    thread.meta.status = "decided"
+    thread.meta.decision = Decision(
+        summary="Use protobuf for the wire format.",
+        decided_at="2026-04-24",
+        decided_by="paolo",
+    )
+    save_thread(thread)
+
+    # Raw YAML should omit defaults for other threads, include only what is set here.
+    raw = (tmp_path / "pinned-decided" / "thread.yaml").read_text()
+    assert "priority: high" in raw
+    assert "pinned_until: '2026-12-31'" in raw or "pinned_until: \"2026-12-31\"" in raw or "pinned_until: 2026-12-31" in raw
+    assert "summary: Use protobuf for the wire format." in raw
+    assert "decided_by: paolo" in raw
+
+    loaded = load_thread(tmp_path, "pinned-decided")
+    assert loaded.meta.priority == "high"
+    assert loaded.meta.pinned_until == "2026-12-31"
+    assert loaded.meta.status == "decided"
+    assert loaded.meta.decision is not None
+    assert loaded.meta.decision.summary == "Use protobuf for the wire format."
+    assert loaded.meta.decision.decided_at == "2026-04-24"
+    assert loaded.meta.decision.decided_by == "paolo"
+
+
+def test_roundtrip_defaults_not_serialised(tmp_path):
+    """A plain thread without pin/decision should not write any of the new fields."""
+    thread = _make_thread(tmp_path, slug="plain")
+    save_thread(thread)
+    raw = (tmp_path / "plain" / "thread.yaml").read_text()
+    assert "priority:" not in raw
+    assert "pinned_until:" not in raw
+    assert "decision:" not in raw
+
+    loaded = load_thread(tmp_path, "plain")
+    assert loaded.meta.priority == "normal"
+    assert loaded.meta.pinned_until == ""
+    assert loaded.meta.decision is None
 
 
 # ---------------------------------------------------------------------------
@@ -1470,3 +1516,218 @@ def test_inbox_format_prompt_dumps_bodies(tmp_path):
     assert "run the migration" in result.output
     assert "to=next-session" in result.output
     assert "textforums add starter" in result.output
+
+
+# ---------------------------------------------------------------------------
+# pins
+# ---------------------------------------------------------------------------
+
+def test_pin_sets_priority_high(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    result = runner.invoke(forums, ["pin", "t"])
+    assert result.exit_code == 0, result.output
+    t = load_thread(tmp_path, "t")
+    assert t.meta.priority == "high"
+    assert t.meta.pinned_until == ""
+
+
+def test_pin_with_until(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    result = runner.invoke(forums, ["pin", "t", "--until", "2030-01-01"])
+    assert result.exit_code == 0
+    t = load_thread(tmp_path, "t")
+    assert t.meta.pinned_until == "2030-01-01"
+
+
+def test_unpin_clears_fields(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    runner.invoke(forums, ["pin", "t", "--until", "2030-01-01"])
+    result = runner.invoke(forums, ["unpin", "t"])
+    assert result.exit_code == 0
+    t = load_thread(tmp_path, "t")
+    assert t.meta.priority == "normal"
+    assert t.meta.pinned_until == ""
+
+
+def test_close_auto_unpins(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    runner.invoke(forums, ["pin", "t"])
+    runner.invoke(forums, ["close", "t"])
+    t = load_thread(tmp_path, "t")
+    assert t.meta.priority == "normal"
+    assert t.meta.pinned_until == ""
+    assert t.meta.status == "resolved"
+
+
+def test_pinned_until_in_past_ignored(tmp_path):
+    from textworkspace.forums import is_effectively_pinned
+    meta = ThreadMeta(title="t", created="2026-01-01T00:00:00Z", author="a",
+                      priority="normal", pinned_until="2020-01-01")
+    # Past expiry — no high priority — should not be pinned.
+    assert not is_effectively_pinned(meta)
+    # High priority only (no expiry) — pinned.
+    meta2 = ThreadMeta(title="t", created="2026-01-01T00:00:00Z", author="a", priority="high")
+    assert is_effectively_pinned(meta2)
+
+
+def test_inbox_pinned_section_above_unread(tmp_path):
+    runner = _runner(tmp_path)
+    # Unread thread
+    runner.invoke(forums, ["new", "--title", "unread-thread", "--content", "u", "--repo", "r"])
+    # Pinned thread
+    runner.invoke(forums, ["new", "--title", "pinned-thread", "--content", "p", "--repo", "r"])
+    runner.invoke(forums, ["pin", "pinned-thread"])
+
+    result = runner.invoke(forums, ["inbox", "--repo", "r"])
+    assert result.exit_code == 0, result.output
+    pinned_idx = result.output.find("## Pinned")
+    unread_idx = result.output.find("## Unread")
+    assert pinned_idx != -1
+    assert unread_idx != -1
+    assert pinned_idx < unread_idx
+    # Pinned thread appears ONLY in pinned, not duplicated in unread.
+    unread_section = result.output[unread_idx:]
+    assert "pinned-thread" not in unread_section
+    assert "unread-thread" in unread_section
+
+
+def test_inbox_format_prompt_pinned_marker(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "important-one", "--content", "do it", "--repo", "r"])
+    runner.invoke(forums, ["pin", "important-one"])
+    result = runner.invoke(forums, ["inbox", "--repo", "r", "--format", "prompt"])
+    assert result.exit_code == 0
+    assert "[PINNED]" in result.output
+
+
+# ---------------------------------------------------------------------------
+# decisions
+# ---------------------------------------------------------------------------
+
+def test_decide_stamps_and_appends_entry(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Pick-a-wire", "--content", "proto vs json"])
+    result = runner.invoke(forums, ["decide", "pick-a-wire", "--summary", "Use protobuf."])
+    assert result.exit_code == 0, result.output
+    t = load_thread(tmp_path, "pick-a-wire")
+    assert t.meta.status == "decided"
+    assert t.meta.decision is not None
+    assert t.meta.decision.summary == "Use protobuf."
+    assert t.meta.decision.decided_by == "tester"
+    assert t.meta.decision.decided_at  # today's date, non-empty
+    # Final entry is the decision line.
+    assert t.entries[-1].content == "Decision: Use protobuf."
+    assert t.entries[-1].status == "decided"
+
+
+def test_decide_twice_requires_force(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    runner.invoke(forums, ["decide", "t", "--summary", "first"])
+    result = runner.invoke(forums, ["decide", "t", "--summary", "second"])
+    assert result.exit_code != 0
+    # Force overwrites.
+    result = runner.invoke(forums, ["decide", "t", "--summary", "second", "--force"])
+    assert result.exit_code == 0, result.output
+    t = load_thread(tmp_path, "t")
+    assert t.meta.decision.summary == "second"
+
+
+def test_reopen_refuses_decided_without_force(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    runner.invoke(forums, ["decide", "t", "--summary", "done"])
+    result = runner.invoke(forums, ["reopen", "t"])
+    assert result.exit_code != 0
+    assert "decided" in result.output.lower() or "decided" in str(result.exception).lower()
+
+    result = runner.invoke(forums, ["reopen", "t", "--force"])
+    assert result.exit_code == 0, result.output
+    t = load_thread(tmp_path, "t")
+    assert t.meta.status == "open"
+    # Decision record is preserved.
+    assert t.meta.decision is not None
+
+
+def test_decide_clears_pin(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    runner.invoke(forums, ["pin", "t", "--until", "2030-01-01"])
+    runner.invoke(forums, ["decide", "t", "--summary", "done"])
+    t = load_thread(tmp_path, "t")
+    assert t.meta.priority == "normal"
+    assert t.meta.pinned_until == ""
+
+
+def test_decisions_list_filters_repo(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "In-x", "--content", "c", "--repo", "x"])
+    runner.invoke(forums, ["new", "--title", "In-y", "--content", "c", "--repo", "y"])
+    runner.invoke(forums, ["decide", "in-x", "--summary", "sx"])
+    runner.invoke(forums, ["decide", "in-y", "--summary", "sy"])
+    result = runner.invoke(forums, ["decisions", "list", "--repo", "x"])
+    assert result.exit_code == 0, result.output
+    assert "in-x" in result.output
+    assert "in-y" not in result.output
+
+
+def test_decisions_show(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Pick", "--content", "c"])
+    runner.invoke(forums, ["decide", "pick", "--summary", "Use A."])
+    result = runner.invoke(forums, ["decisions", "show", "pick"])
+    assert result.exit_code == 0, result.output
+    assert "Decision:" in result.output
+    assert "Use A." in result.output
+
+
+def test_decisions_supersede_links(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Old", "--content", "c"])
+    runner.invoke(forums, ["new", "--title", "New", "--content", "c"])
+    runner.invoke(forums, ["decide", "old", "--summary", "v1"])
+    runner.invoke(forums, ["decide", "new", "--summary", "v2"])
+    result = runner.invoke(forums, ["decisions", "supersede", "old", "new"])
+    assert result.exit_code == 0, result.output
+    t = load_thread(tmp_path, "old")
+    assert any(lnk.rel == "superseded-by" and lnk.slug == "new" for lnk in t.meta.links)
+    # Default list should hide superseded.
+    result = runner.invoke(forums, ["decisions", "list"])
+    assert "old" not in result.output
+    assert "new" in result.output
+    # --all shows them.
+    result = runner.invoke(forums, ["decisions", "list", "--all"])
+    assert "old" in result.output
+
+
+def test_inbox_excludes_decided_by_default(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "Open-one", "--content", "c", "--repo", "r"])
+    runner.invoke(forums, ["new", "--title", "Decided-one", "--content", "c", "--repo", "r"])
+    runner.invoke(forums, ["decide", "decided-one", "--summary", "done"])
+
+    result = runner.invoke(forums, ["inbox", "--repo", "r"])
+    assert result.exit_code == 0
+    assert "open-one" in result.output
+    assert "decided-one" not in result.output
+
+    result = runner.invoke(forums, ["inbox", "--repo", "r", "--include-decided"])
+    assert "decided-one" in result.output
+
+
+def test_show_displays_priority_and_decision(tmp_path):
+    runner = _runner(tmp_path)
+    runner.invoke(forums, ["new", "--title", "T", "--content", "c"])
+    runner.invoke(forums, ["pin", "t", "--until", "2030-01-01"])
+    result = runner.invoke(forums, ["show", "t"])
+    assert "Priority: high" in result.output
+    assert "Pinned until: 2030-01-01" in result.output
+
+    runner.invoke(forums, ["decide", "t", "--summary", "S."])
+    result = runner.invoke(forums, ["show", "t"])
+    assert "Decision:" in result.output
+    assert "summary:    S." in result.output
