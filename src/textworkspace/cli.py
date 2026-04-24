@@ -2110,11 +2110,11 @@ def ideas_expand(repo_name: str, idea_id: str, model: str | None, dry_run: bool)
     if idea is None:
         raise click.ClickException(f"idea '{idea_id}' not found in {repo_name}")
 
-    pp_bin = shutil.which("pp")
-    if pp_bin is None:
-        raise click.ClickException("pp not found on PATH — install textprompts first")
+    bin_path = shutil.which("textprompts") or shutil.which("pp")
+    if bin_path is None:
+        raise click.ClickException("textprompts not found on PATH — run: tw dev install")
 
-    cmd = [pp_bin, "persona", "run", "idea-expander", "--idea", f"{repo_name}/{idea_id}"]
+    cmd = [bin_path, "persona", "run", "idea-expander", "--idea", f"{repo_name}/{idea_id}"]
     if model:
         cmd += ["--model", model]
 
@@ -2254,23 +2254,21 @@ def read_cmd(ctx: click.Context) -> None:
 
 
 class _PromptsPassthroughGroup(_PassthroughGroup):
-    # Use the short alias `pp` as the forward target — it's the canonical
-    # entry for this tool and likelier to be on PATH than `textprompts`.
-    tool_name = "pp"
+    tool_name = "textprompts"
 
 
 @main.group("prompts", cls=_PromptsPassthroughGroup, invoke_without_command=True)
 @click.pass_context
 def prompts_cmd(ctx: click.Context) -> None:
-    """Run pp (textprompts) — persona runs, tasks, daemon, pipeline, ….
+    """Run textprompts (pp) — persona runs, tasks, daemon, pipeline, ….
 
-    Subcommands are forwarded to `pp`. Run `tw prompts <sub> --help` for
-    the tool's own docs. With no subcommand, prints pp's top-level help.
+    Subcommands are forwarded to `textprompts`. Run `tw prompts <sub> --help`
+    for the tool's own docs. With no subcommand, prints the top-level help.
     """
     if ctx.invoked_subcommand is None:
-        binary = shutil.which("pp")
+        binary = shutil.which("textprompts")
         if binary is None:
-            click.echo("prompts: pp not installed — run: tw dev install", err=True)
+            click.echo("prompts: textprompts not installed — run: tw dev install", err=True)
             raise SystemExit(1)
         result = subprocess.run([binary, "--help"], check=False)
         raise SystemExit(result.returncode)
