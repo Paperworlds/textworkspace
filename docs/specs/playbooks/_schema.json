@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://textworkspace/specs/playbooks/_schema.json",
+  "title": "Playbook v0.1.0",
+  "description": "Static schema for textworkspace playbook specs. The frontmatter (top of the file, between --- markers) and the body's `steps:` block. See docs/specs/playbook-format.md.",
+  "type": "object",
+  "required": ["slug", "owner", "status", "version", "persona", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "description": "Filesystem-friendly, unique within the owner repo."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Repo that owns the playbook (matches the registered repo name)."
+    },
+    "status": {
+      "enum": ["draft", "adopted", "superseded"]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semver. Bump on any spec edit. Adopted versions are frozen."
+    },
+    "adopted_at": {
+      "type": "string",
+      "format": "date",
+      "description": "Set when status flips to adopted."
+    },
+    "supersedes": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+@\\d+\\.\\d+\\.\\d+$",
+      "description": "If this playbook replaces an older one: '<slug>@<version>'."
+    },
+    "consumers": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Repos that register/discover this playbook."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "persona": {
+      "type": "string",
+      "description": "Persona slug. Bound for persona_turn steps; tool scope applies to run steps."
+    },
+    "inputs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/input"}
+    },
+    "outputs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/output"}
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_turns": {"type": "integer", "minimum": 1},
+        "budget_usd": {"type": "number", "minimum": 0}
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/step"}
+    }
+  },
+  "$defs": {
+    "input": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "type": {
+          "enum": ["string", "int", "bool", "path"]
+        },
+        "required": {"type": "boolean"},
+        "default": {},
+        "description": {"type": "string"}
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": ["forum-thread", "file", "textmap-node", "stdout"]
+        },
+        "tag": {"type": "string"},
+        "description": {"type": "string"}
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "description": "Unique within the playbook. Referenced as ${steps.<id>.out}."
+        },
+        "kind": {
+          "enum": ["run", "persona_turn"],
+          "description": "v1 supports run (shell) and persona_turn (LLM call). sub_playbook is reserved for v2."
+        },
+        "run": {
+          "type": "string",
+          "description": "Shell command. Required when kind=run."
+        },
+        "persona_turn": {
+          "type": "string",
+          "description": "Prompt body for the LLM turn. Required when kind=persona_turn."
+        },
+        "skip_if": {
+          "type": "string",
+          "description": "Boolean expression evaluated in the runner's sandbox. v1 supports comparisons, startswith/contains, and 'now-Nd' date ops."
+        },
+        "out": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Bind step output as ${steps.<id>.out} for later steps."
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "run"}}},
+          "then": {"required": ["run"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "persona_turn"}}},
+          "then": {"required": ["persona_turn"]}
+        }
+      ]
+    }
+  }
+}
