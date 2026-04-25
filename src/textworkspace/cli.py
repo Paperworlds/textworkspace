@@ -2500,6 +2500,113 @@ def _is_structured(content: str) -> bool:
     return bool(_FRONTMATTER_RE.match(content))
 
 
+@runs_cmd.group("ideas", invoke_without_command=True)
+@click.pass_context
+def runs_ideas(ctx: click.Context) -> None:
+    """Aggregator for agent_ideas across all run threads (audit §4)."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(runs_ideas_list)
+
+
+@runs_ideas.command("list")
+@click.option("--playbook", default=None, help="Filter by playbook slug.", shell_complete=_complete_playbook_slug)
+@click.option("--repo", default=None, help="Filter by repo:<X> tag.", shell_complete=_complete_repo_name)
+@click.option("--unread/--all", default=True, show_default=True, help="Hide ideas already promoted.")
+def runs_ideas_list(playbook: str | None, repo: str | None, unread: bool) -> None:
+    """Aggregated agent_ideas across run threads."""
+    from textworkspace.forums import get_root
+    from textworkspace.runs_ideas import collect_run_ideas, promoted_keys
+
+    repos = _playbook_repos() or {}
+    ideas = collect_run_ideas(get_root())
+    if playbook:
+        ideas = [i for i in ideas if i.playbook_slug == playbook]
+    if repo:
+        ideas = [i for i in ideas if i.repo == repo]
+
+    if unread and repos:
+        promoted = promoted_keys(repos)
+        ideas = [i for i in ideas if i.key not in promoted]
+
+    if not ideas:
+        click.echo("No run ideas found." if not unread else "No unread run ideas.")
+        return
+
+    pb_w = max(len(i.playbook_slug) for i in ideas)
+    step_w = max(len(i.step_id) for i in ideas)
+    for i in ideas:
+        text = i.text.replace("\n", " ").strip()[:80]
+        click.echo(f"  {i.playbook_slug:<{pb_w}}  {i.step_id:<{step_w}}  [{i.run_slug} #{i.idea_index}]  {text}")
+
+
+@runs_ideas.command("show")
+@click.argument("run_slug")
+@click.argument("step_id")
+def runs_ideas_show(run_slug: str, step_id: str) -> None:
+    """Show every agent_idea recorded under a (run, step), plus feedback."""
+    from textworkspace.forums import get_root
+    from textworkspace.runs_ideas import collect_run_ideas
+
+    matches = [
+        i for i in collect_run_ideas(get_root())
+        if i.run_slug == run_slug and i.step_id == step_id
+    ]
+    if not matches:
+        click.echo(f"runs ideas: no ideas under run={run_slug!r} step={step_id!r}", err=True)
+        raise SystemExit(1)
+
+    head = matches[0]
+    click.echo(f"# {head.run_slug} / {head.step_id}")
+    click.echo(f"  playbook: {head.playbook_slug}")
+    click.echo(f"  repo:     {head.repo or '-'}")
+    if head.agent_feedback:
+        click.echo("")
+        click.echo(f"  feedback: {head.agent_feedback.strip()}")
+    click.echo("")
+    click.echo(f"  ideas ({len(matches)}):")
+    for i in matches:
+        click.echo(f"    [{i.idea_index}] {i.text.strip()}")
+
+
+@runs_ideas.command("promote")
+@click.argument("run_slug")
+@click.argument("step_id")
+@click.argument("idea_index", type=int)
+@click.option(
+    "--into", "into_repo",
+    required=True,
+    shell_complete=_complete_repo_name,
+    help="Target repo (its IDEAS file gets the new entry).",
+)
+def runs_ideas_promote(run_slug: str, step_id: str, idea_index: int, into_repo: str) -> None:
+    """Copy a run-idea into a repo's IDEAS file with provenance."""
+    from datetime import date
+    from textworkspace.forums import get_author, get_root
+    from textworkspace.runs_ideas import find_run_idea, promote
+
+    repos = _playbook_repos() or {}
+    if into_repo not in repos:
+        click.echo(f"runs ideas: repo {into_repo!r} is not registered.", err=True)
+        raise SystemExit(1)
+
+    ri = find_run_idea(get_root(), run_slug, step_id, idea_index)
+    if ri is None:
+        click.echo(
+            f"runs ideas: not found — run={run_slug!r} step={step_id!r} idx={idea_index}",
+            err=True,
+        )
+        raise SystemExit(1)
+
+    written = promote(
+        ri,
+        repos[into_repo],
+        promoted_by=get_author(),
+        promoted_at=date.today().isoformat(),
+    )
+    click.echo(f"✓ promoted into {written}")
+    click.echo(f"  from_run={ri.run_slug} from_step={ri.step_id} from_idea_index={ri.idea_index}")
+
+
 # ---------------------------------------------------------------------------
 # tw up / tw down — bring the whole MCP fleet up or down via textserve
 # ---------------------------------------------------------------------------
