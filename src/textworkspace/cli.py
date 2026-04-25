@@ -1434,6 +1434,17 @@ def _complete_idea_id(ctx, param, incomplete):  # noqa: ARG001
         return []
 
 
+def _complete_playbook_slug(ctx, param, incomplete):  # noqa: ARG001
+    try:
+        from textworkspace.playbooks import discover_playbooks
+        from textworkspace.repos import iter_all_repos
+        repos = iter_all_repos(load_config())
+        result = discover_playbooks(repos or {})
+        return [pb.slug for pb in result.playbooks if pb.slug.startswith(incomplete)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 @main.group("repo", invoke_without_command=True)
 @click.pass_context
 def repo_cmd(ctx: click.Context) -> None:
@@ -2168,6 +2179,132 @@ def ideas_expand(repo_name: str, idea_id: str, model: str | None, dry_run: bool)
     else:
         click.echo(f"(back-link already present or source shape not writable: {idea.path})")
     click.echo(f"next: textforums show {slug}")
+
+
+# ---------------------------------------------------------------------------
+# tw playbook — registry / discovery for agent playbooks
+# ---------------------------------------------------------------------------
+
+
+@main.group("playbook", invoke_without_command=True)
+@click.pass_context
+def playbook_cmd(ctx: click.Context) -> None:
+    """List and show playbook specs across registered repos.
+
+    Playbooks live at <repo>/docs/specs/playbooks/<slug>.yaml.
+    Execution is delegated to `pp playbook run` (textprompts).
+    See docs/specs/playbook-format.md.
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(playbook_list)
+
+
+def _playbook_repos() -> dict[str, Path] | None:
+    from textworkspace.repos import iter_all_repos
+    repos = iter_all_repos(load_config())
+    return repos or None
+
+
+@playbook_cmd.command("list")
+@click.option("--owner", default=None, help="Filter by owner repo.", shell_complete=_complete_repo_name)
+@click.option("--status", default=None, help="Filter by status (draft/adopted/superseded).")
+@click.option("--errors/--no-errors", default=False, help="Show parse errors.")
+def playbook_list(owner: str | None, status: str | None, errors: bool) -> None:
+    """List playbooks across all registered repos."""
+    from textworkspace.playbooks import discover_playbooks
+
+    repos = _playbook_repos()
+    if repos is None:
+        click.echo("playbook: no repos found — set dev_root or register with `tw repo add`", err=True)
+        raise SystemExit(1)
+
+    result = discover_playbooks(repos)
+    pbs = result.playbooks
+    if owner:
+        pbs = [p for p in pbs if p.owner == owner]
+    if status:
+        pbs = [p for p in pbs if p.status == status]
+
+    if not pbs and not (errors and result.errors):
+        click.echo("No playbooks found.")
+        return
+
+    if pbs:
+        slug_w = max(len(p.slug) for p in pbs)
+        owner_w = max(len(p.owner) for p in pbs)
+        status_w = max(len(p.status) for p in pbs)
+        ver_w = max(len(p.version) for p in pbs)
+        persona_w = max(len(p.persona) for p in pbs)
+        for p in pbs:
+            desc = (p.description.splitlines()[0] if p.description else "").strip()[:60]
+            click.echo(
+                f"  {p.slug:<{slug_w}}  {p.owner:<{owner_w}}  "
+                f"{p.status:<{status_w}}  {p.version:<{ver_w}}  "
+                f"{p.persona:<{persona_w}}  {desc}"
+            )
+
+    if errors and result.errors:
+        click.echo("")
+        click.echo(f"{len(result.errors)} parse error(s):", err=True)
+        for path, msg in result.errors:
+            click.echo(f"  {path}: {msg}", err=True)
+
+
+@playbook_cmd.command("show")
+@click.argument("slug", shell_complete=_complete_playbook_slug)
+def playbook_show(slug: str) -> None:
+    """Print a playbook's contents — frontmatter summary + step list."""
+    from textworkspace.playbooks import find_playbook
+
+    repos = _playbook_repos()
+    if repos is None:
+        click.echo("playbook: no repos found", err=True)
+        raise SystemExit(1)
+
+    pb = find_playbook(repos, slug)
+    if pb is None:
+        click.echo(f"playbook '{slug}' not found", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"# {pb.slug}")
+    click.echo(f"  owner:    {pb.owner}")
+    click.echo(f"  status:   {pb.status}")
+    click.echo(f"  version:  {pb.version}")
+    click.echo(f"  persona:  {pb.persona}")
+    if pb.adopted_at:
+        click.echo(f"  adopted:  {pb.adopted_at}")
+    if pb.supersedes:
+        click.echo(f"  supersedes: {pb.supersedes}")
+    if pb.consumers:
+        click.echo(f"  consumers: {', '.join(pb.consumers)}")
+    if pb.description:
+        click.echo("")
+        click.echo(f"  {pb.description.strip()}")
+    if pb.inputs:
+        click.echo("")
+        click.echo("  inputs:")
+        for inp in pb.inputs:
+            req = " (required)" if inp.required else ""
+            click.echo(f"    - {inp.name}: {inp.type}{req}  {inp.description}")
+    if pb.outputs:
+        click.echo("")
+        click.echo("  outputs:")
+        for o in pb.outputs:
+            tag = f" tag={o.tag}" if o.tag else ""
+            click.echo(f"    - {o.kind}{tag}  {o.description}")
+    if pb.budget:
+        click.echo("")
+        click.echo(f"  budget: {pb.budget}")
+    click.echo("")
+    click.echo(f"  steps ({len(pb.steps)}):")
+    for s in pb.steps:
+        skip = f"  [skip_if: {s.skip_if}]" if s.skip_if else ""
+        out = f"  → ${{steps.{s.id}.out}}" if s.out else ""
+        first_line = s.body.splitlines()[0][:70] if s.body else ""
+        click.echo(f"    - {s.id} ({s.kind}){skip}{out}")
+        click.echo(f"        {first_line}")
+    click.echo("")
+    click.echo(f"  source: {pb.path}")
 
 
 # ---------------------------------------------------------------------------

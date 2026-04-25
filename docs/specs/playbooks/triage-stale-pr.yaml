@@ -1,0 +1,53 @@
+slug: triage-stale-pr
+owner: textworkspace
+status: draft
+version: 0.1.0
+consumers:
+  - textworkspace
+description: |
+  Triage a single PR — fetch state, ask the persona to classify
+  (close / ping / leave), then post the verdict as a forum thread.
+persona: pr-reviewer
+inputs:
+  - name: pr_number
+    type: int
+    required: true
+    description: GitHub PR number
+  - name: repo
+    type: string
+    required: true
+    description: owner/repo slug (e.g. paperworlds/textworkspace)
+outputs:
+  - kind: forum-thread
+    tag: "playbook:triage-stale-pr"
+    description: one thread per run carrying the verdict
+budget:
+  max_turns: 3
+  budget_usd: 0.10
+
+steps:
+  - id: fetch
+    kind: run
+    run: gh pr view ${inputs.pr_number} --repo ${inputs.repo} --json author,updatedAt,title
+    out: pr
+
+  - id: classify
+    kind: persona_turn
+    persona_turn: |
+      Decide whether this PR should be closed, pinged, or left alone.
+      Reply with exactly one of: CLOSE | PING | LEAVE — followed by a
+      one-line reason.
+
+      Context:
+      ${steps.fetch.out}
+    out: verdict
+
+  - id: post
+    kind: run
+    skip_if: "${steps.classify.out} startswith 'LEAVE'"
+    run: |
+      textforums new \
+        --tag playbook:triage-stale-pr \
+        --tag repo:${inputs.repo} \
+        --title "PR #${inputs.pr_number}: ${steps.classify.out}" \
+        --content "Verdict: ${steps.classify.out}\n\nMetadata:\n${steps.fetch.out}"
