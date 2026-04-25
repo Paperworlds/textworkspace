@@ -2308,6 +2308,100 @@ def playbook_show(slug: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw run — thin wrapper that delegates a playbook run to `pp playbook run`
+# ---------------------------------------------------------------------------
+
+
+@main.command("run")
+@click.argument("slug", shell_complete=_complete_playbook_slug)
+@click.option(
+    "--input", "-i", "inputs",
+    multiple=True,
+    metavar="NAME=VALUE",
+    help="Input values for the playbook (repeatable).",
+)
+@click.option("--dry-run", is_flag=True, help="Resolve and print the would-be command, do not execute.")
+def run_cmd(slug: str, inputs: tuple[str, ...], dry_run: bool) -> None:
+    """Run a playbook by slug.
+
+    Discovery side: resolves <slug> across registered repos. Execution is
+    delegated to `pp playbook run`; this command is a thin wrapper.
+
+    \b
+    Examples:
+      tw run triage-stale-pr -i pr_number=42 -i repo=foo/bar
+      tw run triage-stale-pr --dry-run
+    """
+    from textworkspace.playbooks import find_playbook
+    from textworkspace.doctor import detect_installed_tools
+
+    repos = _playbook_repos()
+    if repos is None:
+        click.echo("run: no repos found — set dev_root or register with `tw repo add`", err=True)
+        raise SystemExit(1)
+
+    pb = find_playbook(repos, slug)
+    if pb is None:
+        click.echo(f"run: playbook '{slug}' not found", err=True)
+        raise SystemExit(1)
+
+    # Validate input keys against declared inputs.
+    declared = {i.name: i for i in pb.inputs}
+    parsed_inputs: dict[str, str] = {}
+    for raw in inputs:
+        if "=" not in raw:
+            click.echo(f"run: invalid --input {raw!r} (expected NAME=VALUE)", err=True)
+            raise SystemExit(2)
+        name, _, value = raw.partition("=")
+        if name not in declared:
+            click.echo(
+                f"run: unknown input {name!r} — declared inputs: {sorted(declared)}",
+                err=True,
+            )
+            raise SystemExit(2)
+        parsed_inputs[name] = value
+
+    missing = [n for n, i in declared.items() if i.required and n not in parsed_inputs]
+    if missing:
+        click.echo(f"run: missing required input(s): {missing}", err=True)
+        raise SystemExit(2)
+
+    # Find pp / textprompts.
+    tools = detect_installed_tools()
+    pp_info = tools.get("textprompts")
+    pp_bin = pp_info.bin_path if pp_info and pp_info.installed else None
+
+    cmd = [pp_bin or "textprompts", "playbook", "run", slug]
+    for name, value in parsed_inputs.items():
+        cmd.extend(["--input", f"{name}={value}"])
+
+    click.echo(f"resolved: {pb.path}")
+    click.echo(f"command:  {' '.join(cmd)}")
+
+    if dry_run:
+        click.echo("(dry-run — not executing)")
+        return
+
+    if pp_bin is None:
+        click.echo(
+            "\nrun: textprompts is not installed. Install it via `tw dev install` "
+            "or wait for `pp playbook run` to ship.",
+            err=True,
+        )
+        raise SystemExit(127)
+
+    result = subprocess.run(cmd)
+    if result.returncode == 2:
+        # Convention: exit 2 = tool does not implement the verb.
+        click.echo(
+            f"\nrun: '{pp_bin} playbook run' not yet supported by this textprompts. "
+            "See docs/specs/playbook-format.md for the executor contract.",
+            err=True,
+        )
+    raise SystemExit(result.returncode)
+
+
+# ---------------------------------------------------------------------------
 # tw up / tw down — bring the whole MCP fleet up or down via textserve
 # ---------------------------------------------------------------------------
 
