@@ -2402,6 +2402,105 @@ def run_cmd(slug: str, inputs: tuple[str, ...], dry_run: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# tw runs — read-only queries over playbook run threads
+# ---------------------------------------------------------------------------
+
+
+@main.group("runs", invoke_without_command=True)
+@click.pass_context
+def runs_cmd(ctx: click.Context) -> None:
+    """List and inspect playbook run threads.
+
+    Run threads are forum threads tagged `playbook:<slug>` produced by
+    `pp playbook run`. See docs/audit.yaml.
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(runs_list)
+
+
+@runs_cmd.command("list")
+@click.option("--playbook", default=None, help="Filter by playbook slug.", shell_complete=_complete_playbook_slug)
+@click.option("--repo", default=None, help="Filter by repo:<X> tag.", shell_complete=_complete_repo_name)
+@click.option("--status", default=None, help="Filter by thread status (open/resolved/decided).")
+def runs_list(playbook: str | None, repo: str | None, status: str | None) -> None:
+    """List playbook runs as forum threads."""
+    from textworkspace.forums import get_root
+    from textworkspace.runs import list_runs
+
+    runs = list_runs(get_root(), playbook=playbook, repo=repo, status=status)
+    if not runs:
+        click.echo("No runs found.")
+        return
+
+    slug_w = max(len(r.slug) for r in runs)
+    pb_w = max(len(r.playbook_slug) for r in runs)
+    status_w = max(len(r.thread.meta.status) for r in runs)
+    for r in runs:
+        repo_str = r.repo or "-"
+        run_str = r.run_id or "-"
+        title = (r.thread.meta.title or "").strip()[:60]
+        click.echo(
+            f"  {r.slug:<{slug_w}}  {r.playbook_slug:<{pb_w}}  "
+            f"{r.thread.meta.status:<{status_w}}  "
+            f"repo={repo_str}  run={run_str}  {title}"
+        )
+
+
+@runs_cmd.command("show")
+@click.argument("slug")
+def runs_show(slug: str) -> None:
+    """Print a run's per-step entries (parsed where audit-format applies)."""
+    from textworkspace.forums import get_root
+    from textworkspace.runs import find_run
+
+    run = find_run(get_root(), slug)
+    if run is None:
+        click.echo(f"runs: '{slug}' not found or not a playbook run", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"# {run.slug}")
+    click.echo(f"  playbook: {run.playbook_slug}")
+    click.echo(f"  repo:     {run.repo or '-'}")
+    click.echo(f"  run_id:   {run.run_id or '-'}")
+    click.echo(f"  status:   {run.thread.meta.status}")
+    click.echo(f"  title:    {run.thread.meta.title}")
+    click.echo("")
+
+    if not run.thread.entries:
+        click.echo("  (no entries)")
+        return
+
+    steps = run.steps
+    if steps:
+        click.echo(f"  steps ({len(steps)}):")
+        for step in steps:
+            click.echo(f"    - {step.step_id} [{step.status}]  {step.output_summary}")
+            if step.duration_ms is not None:
+                click.echo(f"        duration: {step.duration_ms}ms")
+            if step.agent_feedback:
+                fb = step.agent_feedback.strip().splitlines()[0][:80]
+                click.echo(f"        feedback: {fb}")
+            if step.agent_ideas:
+                click.echo(f"        ideas: {len(step.agent_ideas)}")
+                for idea in step.agent_ideas:
+                    click.echo(f"          • {idea[:80]}")
+
+    # Surface entries that are NOT structured (e.g. reviewer replies).
+    plain = [e for e in run.thread.entries if not _is_structured(e.content)]
+    if plain:
+        click.echo("")
+        click.echo(f"  replies ({len(plain)}):")
+        for e in plain:
+            first = e.content.strip().splitlines()[0][:80] if e.content else ""
+            click.echo(f"    - [{e.timestamp}] {e.author}: {first}")
+
+
+def _is_structured(content: str) -> bool:
+    from textworkspace.runs import _FRONTMATTER_RE  # noqa: PLC0415
+    return bool(_FRONTMATTER_RE.match(content))
+
+
+# ---------------------------------------------------------------------------
 # tw up / tw down — bring the whole MCP fleet up or down via textserve
 # ---------------------------------------------------------------------------
 
