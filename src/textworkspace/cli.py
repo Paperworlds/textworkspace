@@ -1576,7 +1576,28 @@ def repo_rename(old: str, new: str, dry_run: bool, force: bool) -> None:
     apply_plan(plan, cfg, forums_root)
     save_config(cfg)
     click.echo(f"\n✓ renamed {old} → {new}")
-    click.echo("Next steps in the source repo (not automated here):")
+
+    # --- Call each installed tool's repo rename (tools opt-in via exit code) ---
+    from textworkspace.doctor import detect_installed_tools
+    tools = detect_installed_tools()
+    for tool_name, tool_info in tools.items():
+        if not tool_info.installed or not tool_info.bin_path:
+            continue
+        result = subprocess.run(
+            [tool_info.bin_path, "repo", "rename", old, new],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            line = result.stdout.strip()
+            click.echo(f"  {tool_name}: {line or 'ok'}")
+        elif result.returncode == 2:
+            pass  # tool does not support the contract — skip silently
+        else:
+            click.echo(f"  [WARN] {tool_name}: {result.stderr.strip()}", err=True)
+
+    click.echo("\nNext steps in the source repo (not automated here):")
     click.echo(f"  - rename folder on disk (then `tw repo move {new} <new-path>` if it moves)")
     click.echo(f"  - update pyproject.toml / spec frontmatter / git remote inside the repo")
     click.echo(f"  - re-ingest textmap: `tw forums decisions ingest`")
