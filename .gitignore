@@ -8,3 +8,4 @@ dist/
 logs/
 IDEAS.md
 pipeline.local.yaml
+.memsearch/

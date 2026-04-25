@@ -1,0 +1,243 @@
+# Playbook audit layer
+#
+# How a playbook run is recorded, audited, and how agent suggestions
+# surface back to the playbook owner without polluting the main idea
+# inbox.
+#
+# This file is the contract for how steps map to forum entries, what
+# fields are required vs optional, and how the aggregated "ideas from
+# runs" layer works.
+#
+# Status: draft  (will graduate via the same adopt-freeze chain as
+# other specs once the first playbook ships)
+
+version: 0.1.0
+status: draft
+owner: textworkspace
+
+# ─────────────────────────────────────────────────────────────────────
+# 1. Run trace shape
+# ─────────────────────────────────────────────────────────────────────
+#
+# When `pp playbook run <slug>` executes, it creates ONE forum thread
+# per run. Each step in the playbook produces ONE entry in that thread.
+# Reviewers (lead loop / human / peer agent) reply to entries the
+# normal way — no new mechanism.
+
+run_trace:
+  thread:
+    title: "playbook:<slug> run <run_id>"
+    tags:
+      - "playbook:<slug>"        # always
+      - "run:<run_id>"           # always
+      - "<owner-repo>"           # for repo-level filtering
+    status: open                  # → resolved on completion
+    # The thread's `meta` block carries the run-level summary
+    meta:
+      playbook_slug: required
+      playbook_version: required   # frozen version at run time
+      started_at: required
+      completed_at: optional       # set on resolve
+      inputs: optional             # snapshot of input values
+      outcome: optional            # ok | failed | aborted
+
+# ─────────────────────────────────────────────────────────────────────
+# 2. Per-step entry schema
+# ─────────────────────────────────────────────────────────────────────
+#
+# Each step writes one entry. Required fields are minimal; optional
+# fields carry the "logs on steroids" payload.
+
+step_entry:
+  required:
+    step_id:
+      type: string
+      desc: matches the `id:` from the playbook spec
+    status:
+      type: enum
+      values: [ok, failed, skipped, aborted]
+    output_summary:
+      type: string
+      desc: |
+        Short human-readable line — what happened. Full output goes in
+        `output_full` if needed; this field is what shows up in
+        `tw forums show`.
+
+  optional:
+    output_full:
+      type: string
+      desc: |
+        Verbose output. Truncate or omit when noisy — the summary is
+        what reviewers read first.
+    agent_feedback:
+      type: string
+      desc: |
+        Free-form note from the executing agent. "This took 3 retries",
+        "the schema looked off", "I had to deviate from the literal
+        instruction because X". Written in first person, addressed to
+        the reviewer.
+    agent_ideas:
+      type: list[string]
+      desc: |
+        Concrete suggestions for the playbook itself — not for the run.
+        Each idea is a candidate revision: "next version should also
+        check X", "step 2 should pin tool version Y". These are the
+        items that surface in the aggregated-ideas layer (see §4).
+    duration_ms:
+      type: int
+    retry_count:
+      type: int
+
+  example:
+    step_id: classify
+    status: ok
+    output_summary: "verdict: ping author (last activity 18d ago)"
+    agent_feedback: |
+      gh output schema changed since playbook was frozen — `updatedAt`
+      is now nested under `head`. Fell back to a string parse, but the
+      step should be revised.
+    agent_ideas:
+      - "pin gh CLI version in the spec, or wrap in a normalizer"
+      - "add a parallel step that checks reviewer activity, not just author"
+    duration_ms: 4210
+    retry_count: 2
+
+# ─────────────────────────────────────────────────────────────────────
+# 3. Reviewer interaction
+# ─────────────────────────────────────────────────────────────────────
+#
+# Reviewers (lead, human, peer agent) interact with the run thread the
+# same way they interact with any forum thread. No new commands.
+
+reviewer_actions:
+  - action: "add reply to step entry"
+    cmd: textforums add <run-slug> --content "..." --in-reply-to <entry-id>
+    use_case: "discuss a specific step's outcome or feedback"
+  - action: "promote idea to playbook owner's inbox"
+    cmd: tw runs ideas promote <run-slug> <step_id> <idea_index>
+    use_case: "agent suggested a revision worth tracking — see §4"
+  - action: "resolve run"
+    cmd: textforums close <run-slug> --content "reviewed: <verdict>"
+    use_case: "audit done; thread becomes read-only"
+  - action: "decide on revision"
+    cmd: tw forums decide <run-slug> --summary "..."
+    use_case: |
+      The discussion in the thread converged on "playbook needs change
+      X" — capture as a decision, which then drives a new playbook
+      version (supersedes chain).
+
+# ─────────────────────────────────────────────────────────────────────
+# 4. Aggregated ideas-from-runs layer  (the "textmap-inbox-style" view)
+# ─────────────────────────────────────────────────────────────────────
+#
+# The problem: agent_ideas captured per step would flood `tw ideas` if
+# we surfaced them automatically. But we don't want to lose them inside
+# run threads either. Solution: a dedicated, separate inbox view —
+# read-only aggregator over run threads, with explicit promotion.
+
+ideas_from_runs:
+  goal: |
+    A queryable index of every `agent_ideas` entry across every run
+    thread in every repo, without mixing into the curated `tw ideas`
+    inbox. Promotion is explicit.
+
+  cli:
+    list:
+      cmd: tw runs ideas list [--repo X] [--playbook Y] [--since DATE] [--unread]
+      output: |
+        repo/playbook  step_id        idea
+        ─────────────  ─────────────  ────────────────────────────────
+        tw/triage-PR   classify       pin gh CLI version
+        tw/triage-PR   classify       check reviewer activity, not author
+        textworld/...  fetch          ...
+    show:
+      cmd: tw runs ideas show <run-slug> <step_id>
+      desc: shows full step entry with all ideas + agent_feedback
+    promote:
+      cmd: tw runs ideas promote <run-slug> <step_id> <idea_index> [--into <repo>]
+      desc: |
+        Copies the idea into the owner repo's `docs/IDEAS.yaml` (or
+        `.files/ideas/<slug>.yaml`) with a `from_run:` provenance
+        field. Marks the source idea as "promoted" in the index so it
+        doesn't show up in `--unread` again.
+    dismiss:
+      cmd: tw runs ideas dismiss <run-slug> <step_id> <idea_index>
+      desc: marks as reviewed-and-skipped; removed from `--unread`
+
+  performance:
+    # Forums on disk are cheap to read for small N; we don't need an
+    # index from day one. Stage the implementation:
+    stage_1:
+      approach: on-demand scan
+      desc: |
+        Walk `~/.textforums/<slug>/thread.yaml` for any thread tagged
+        `playbook:*`. Collect entries with non-empty `agent_ideas`.
+        Cache by file mtime — if mtime unchanged since last scan, skip
+        re-parsing.
+      threshold: works fine up to ~hundreds of run threads
+      no_new_files: true
+
+    stage_2:
+      approach: maintained index
+      trigger: "scan time > 100ms or > ~500 run threads"
+      desc: |
+        Persist `~/.cache/paperworlds/run-ideas-index.yaml`:
+          - one entry per (run_slug, step_id, idea_index)
+          - fields: repo, playbook, step_id, idea_text, created_at,
+            promoted | dismissed | unread
+        Updated incrementally:
+          - on `pp playbook run` completion (writer side)
+          - on `tw runs ideas promote/dismiss` (reader side)
+        Rebuild from scratch via `tw runs ideas reindex`.
+      no_new_storage_format: true   # reuses YAML, like the rest of tw
+
+    # No stage 3. Even textmap (graph-shaped, growing) gets by with
+    # YAML files; this aggregator is smaller and won't justify SQLite.
+
+  promotion_provenance:
+    # When an idea is promoted, the resulting entry in the owner repo's
+    # idea file carries traceability fields so we can always walk back.
+    fields_added:
+      from_run: "<run-slug>"
+      from_step: "<step_id>"
+      from_playbook: "<owner>/<slug>@<version>"
+      promoted_at: "<iso-date>"
+      promoted_by: "<user or agent>"
+
+# ─────────────────────────────────────────────────────────────────────
+# 5. Open questions parked for v2
+# ─────────────────────────────────────────────────────────────────────
+
+open_questions:
+  - id: cross_run_dedup
+    desc: |
+      If 5 runs all generate the same `agent_ideas` ("pin gh version"),
+      should the aggregated view dedup? Probably yes — but how to
+      detect dupes? Exact string match in v1; fuzzy/embedding-based v2.
+
+  - id: lead_loop_auto_review
+    desc: |
+      The lead loop could include "review unresolved run-ideas" as a
+      step in its own playbook. Out of scope for the audit format
+      itself — but the format should support it (filter by --unread is
+      enough).
+
+  - id: textmap_projection
+    desc: |
+      Should a promoted idea, once decided, become a textmap node? A
+      `decided run-idea` is closer to a `decision` than an `idea`.
+      Defer until we have a few real promotions to look at.
+
+  - id: agent_feedback_surfacing
+    desc: |
+      `agent_feedback` is currently buried in the step entry. Worth a
+      second aggregated view — `tw runs feedback list` — for spotting
+      systemic issues ("step X failed in 4/10 runs")? Probably yes,
+      v1.1.
+
+  - id: noise_control
+    desc: |
+      How does the lead loop avoid being spammed by ideas it's already
+      seen? `--unread` flag + dismiss handle it for humans, but agents
+      may need a different signal (e.g. only show ideas with
+      multiplicity ≥ 2).
