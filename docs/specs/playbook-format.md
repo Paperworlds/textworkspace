@@ -55,10 +55,14 @@ repo, frontmatter, immutable when `status: adopted`).
 
 ### Schema
 
+A playbook is a **single YAML document** (no markdown wrapper, no
+frontmatter delimiters). Same shape as a persona file. The full schema
+is at `docs/specs/playbooks/_schema.json`.
+
 ```yaml
 # docs/specs/playbooks/<slug>.yaml
----
-# Frontmatter — same shape as other specs
+
+# Identity / lifecycle
 slug: <slug>                 # filesystem-friendly, unique within owner
 owner: <repo>                # repo that owns the playbook
 status: draft | adopted | superseded
@@ -67,7 +71,9 @@ adopted_at: <YYYY-MM-DD>     # set when status flips to adopted
 supersedes: <slug>@<version> # optional — replaces an older playbook
 consumers:                   # repos that register/discover this
   - <repo>
-description: <one-line>
+description: <one-line>      # human-readable summary
+
+# Execution shape
 persona: <persona-slug>      # bound persona for any persona_turn steps
 inputs:
   - name: <id>
@@ -82,12 +88,8 @@ outputs:
 budget:
   max_turns: <int>           # optional cap on LLM turns
   budget_usd: <float>        # optional soft $ cap
----
 
-# <playbook title>
-
-<short prose explanation — what the playbook does and when to invoke it.>
-
+# Steps (sequential)
 steps:
   - id: <step-id>            # unique within the playbook
     kind: run                # one of: run | persona_turn
@@ -258,14 +260,16 @@ A playbook author (anyone writing `<owner>/docs/specs/playbooks/X.yaml`) MUST:
 `textworkspace/docs/specs/playbooks/triage-stale-pr.yaml`:
 
 ```yaml
----
 slug: triage-stale-pr
 owner: textworkspace
 status: draft
 version: 0.1.0
 consumers:
   - textworkspace
-description: Triage a single PR — fetch state, classify, post verdict.
+description: |
+  Triage a single PR — fetch state, classify, post verdict.
+  Asks the persona to classify (close / ping / leave) and posts the
+  result as a forum thread.
 persona: pr-reviewer
 inputs:
   - name: pr_number
@@ -283,12 +287,6 @@ outputs:
 budget:
   max_turns: 3
   budget_usd: 0.10
----
-
-# Triage a stale PR
-
-Fetches PR metadata, asks the persona to classify (close / ping /
-leave), then posts a forum thread with the verdict.
 
 steps:
   - id: fetch
